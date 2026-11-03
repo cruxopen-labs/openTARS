@@ -4,6 +4,8 @@ An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B bit-exact on a Xi
 every logit on the board matches the golden model bit for bit. Decode **0.16 s/token** at a 100 MHz
 core clock (v3.2; 2.6 s/token at v1.0), prefill 0.115 s/token, 86% of the XCK26's LUTs.
 
+**Demo:** [Qwen3.5-0.8B chatting on the KV260](demo/Qwen3.5-0.8B-Demo.mp4) (screen recording of `run.sh` on the board).
+
 | Path | What |
 |---|---|
 | `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and Qwen lowering (`llm.py`) |
