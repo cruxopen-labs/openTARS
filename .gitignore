@@ -9,3 +9,5 @@ deploy/kv260/data_v*/
 deploy/kv260/wheels/
 *.bak
 *.orig
+*:Zone.Identifier
+deploy/kv260/data_*/
