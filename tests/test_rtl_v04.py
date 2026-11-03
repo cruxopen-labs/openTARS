@@ -469,3 +469,23 @@ def test_qwen_model_greedy_on_rtl():
     ids, _, _ = low.generate(run, [7, 1000, 42], 2)
     assert len(ids) == 6
 
+
+def test_qwen3_model_greedy_on_rtl():
+    """Qwen3 (two full-attention layers without the output gate, small dims), final norm, tied
+    head (vocabulary 4096): greedy decoding, prefill 3 then 2 decode steps, each step's queue on
+    the RTL and on the golden model from the same DDR: identical bytes."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_Q3_SMALL, ["full_attention"] * 2, vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=8, ddr_bytes=1 << 23, head=True, queue_cap=2048, scratch_bytes=1 << 20)
+
+    def run(ddr, q, n):
+        st, r = both(bytes(ddr), q, n, stall=10, lat=3)
+        assert st.done
+        return r.ddr
+    ids, _, _ = low.generate(run, [7, 1000, 42], 2)
+    assert len(ids) == 6
+

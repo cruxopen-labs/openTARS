@@ -2,15 +2,32 @@
 
 <p align="center"><img src="demo/Qwen3.5-0.8B-Demo.gif" alt="Qwen3.5-0.8B chatting on the KV260" width="720"></p>
 
-An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B bit-exact on a Xilinx Kria KV260**:
-every logit on the board matches the golden model bit for bit. Decode **0.16 s/token** at a 100 MHz
-core clock (v3.2; 2.6 s/token at v1.0), prefill 0.115 s/token, 86% of the XCK26's LUTs.
+An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B and Qwen3-0.6B bit-exact on a Xilinx
+Kria KV260**: every logit on the board matches the golden model bit for bit. Qwen3-0.6B decodes at
+**0.08 s/token** and Qwen3.5-0.8B at **0.16 s/token** (100 MHz core clock, bitstream v3.2; 2.6 s/token
+at v1.0), using 86% of the XCK26's LUTs.
 
 **Demo:** Qwen3.5-0.8B chatting on the KV260 (above; full video: [demo/Qwen3.5-0.8B-Demo.mp4](demo/Qwen3.5-0.8B-Demo.mp4)).
 
+## Tested models
+
+Both run on the same bitstream (v3.2); only the exported model data differs. Measured on the
+board, 100 MHz core clock, greedy decoding, every step's logits bit-exact against the golden model
+(`run.sh selftest`).
+
+| Model | Layers | Model image on the device (INT8 W8A8 weights + states) | Decode | Prefill (20-token prompt, chunks of 4) | Example chat (31 positions) |
+|---|---|---|---|---|---|
+| [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 24: 18 Gated DeltaNet + 6 gated full attention | 887 MiB | 15.7 M cycles = **0.16 s/token** | 2.29 s = 0.115 s/token | 4.5 s |
+| [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) | 28 full attention (GQA 16/8, QK-norm) | 662 MiB | 7.3-8.2 M cycles = **0.08 s/token** | 0.76 s = 0.038 s/token | 1.9 s |
+
+Decode is bound by DDR reads (each token reads every weight once). Qwen3.5's prefill is slower per
+token because its DeltaNet recurrence runs token by token; Qwen3's attention takes a chunk at once.
+Export a model with `tools/export_kv260.py --ckpt <checkpoint>` (the checkpoint's `model_type` picks
+the lowering); on the board, `sudo ./run.sh chat --data <its data directory>`.
+
 | Path | What |
 |---|---|
-| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and Qwen lowering (`llm.py`) |
+| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and the Qwen3.5 / Qwen3 lowering (`llm.py`) |
 | `rtl/` | the core (SystemVerilog; FPGA changes under `` `ifdef TM_FPGA ``) and the KV260 top (`tm_kv260.sv`: AXI-Lite, 4-port 128 B read bridge, page table) |
 | `tests/`, `sim/` | RTL vs golden regressions (Verilator), random queue fuzz, board-like memory model |
 | `fpga/kv260/` | Vivado block design and build (`build.tcl`), device-tree overlay, packaging |

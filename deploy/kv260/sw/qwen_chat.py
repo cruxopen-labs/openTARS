@@ -1,15 +1,17 @@
-"""Chat with Qwen3.5-0.8B on TARS-mini (KV260, 100 MHz), on the serial console.
+"""Chat with the exported model (Qwen3.5-0.8B or Qwen3-0.6B: data/manifest.json) on TARS-mini (KV260,
+100 MHz), on the serial console.
 
     sudo python3 qwen_chat.py [--data ../data] [--max-new 128] [--raw]
 
 Type a message and Enter; the answer streams back token by token. Commands: /reset (new
 conversation), /quit. --raw sends the text as is (no chat template: plain continuation).
 The host (the A53) does the tokenizer, the embedding lookup and the argmax (greedy decoding);
-TARS-mini runs all 24 layers, the final norm and the 248320-word head for every token.
+TARS-mini runs every layer, the final norm and the vocabulary-wide head for every token.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -30,7 +32,8 @@ def main() -> int:
     from tokenizers import Tokenizer
     d = Path(args.data)
     tk = Tokenizer.from_file(str(d / "tokenizer.json"))
-    print("TARS-mini on KV260: loading Qwen3.5-0.8B ...", flush=True)
+    name = json.loads((d / "manifest.json").read_text()).get("model", "the model")
+    print(f"TARS-mini on KV260: loading {name} ...", flush=True)
     dev = B.Golden() if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga()   # golden: a PC check
     m = B.Qwen(dev, d)
     eos = set(m.m["eos_ids"])

@@ -1,6 +1,8 @@
-"""Export Qwen3.5-0.8B for the KV260 board runtime (deploy/kv260/sw/tars_board.py).
+"""Export Qwen3.5-0.8B or Qwen3-0.6B (the checkpoint's config.json model_type picks it) for the KV260
+board runtime (deploy/kv260/sw/tars_board.py).
 
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3.5-0.8B [--T 256] [--out deploy/kv260/data]
+    python3 tools/export_kv260.py --ckpt ~/models/Qwen3-0.6B --out deploy/kv260/data_qwen3
     python3 tools/export_kv260.py --out deploy/kv260/data --check-only      # redo the golden check
     python3 tools/export_kv260.py --chunks-only    # add the prefill chunk queues to an export
 
@@ -42,13 +44,22 @@ CHECKS = [dict(name="plain", text="The capital of France is", chat=False, new=8)
           dict(name="chat", text="Write one sentence about the Great Wall.", chat=True, new=12)]
 
 
+def model_config(ckpt):
+    """The lowering's config for a checkpoint: Qwen3 (model_type "qwen3") or Qwen3.5."""
+    from tars_mini import qwen_ref as Q
+    mt = json.loads((Path(ckpt) / "config.json").read_text()).get("model_type", "")
+    if mt == "qwen3":
+        return Q.make_config(Q.CFG_Q3_06B, vocab=Q.VOCAB_Q3_06B)
+    return Q.make_config(Q.CFG_08B, Q.LAYERS_08B, vocab=Q.VOCAB_08B)
+
+
 def export(args) -> None:
     from tars_mini import llm as L
     from tars_mini import qwen_ref as Q
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     t = time.time()
-    cfg = Q.make_config(Q.CFG_08B, Q.LAYERS_08B, vocab=Q.VOCAB_08B)
+    cfg = model_config(args.ckpt)
     w = Q.load_weights(args.ckpt, cfg, embed=True)
     emb = np.ascontiguousarray(w["embed_tokens.weight"], np.float32)
     bits = emb.view(np.uint32)
@@ -88,7 +99,7 @@ def export(args) -> None:
     for fn in ("tokenizer.json", "tokenizer_config.json"):
         if (Path(args.ckpt) / fn).exists():
             shutil.copy(Path(args.ckpt) / fn, out / fn)
-    m = dict(model="Qwen3.5-0.8B", max_tokens=args.T, hidden=low.H, vocab=low.vocab,
+    m = dict(model=Path(args.ckpt).resolve().name, max_tokens=args.T, hidden=low.H, vocab=low.vocab,
              image_bytes=len(img) + pad, state_end=low.scratch_end, qbase=low.qbase,
              queue_cap=low.queue_cap, x0_off=low.x0.off, x0_ld=low.x0.ld, logits_off=low.logits.off,
              mem_bytes=DDR, chat_prefix=pre, chat_suffix=post, eos_ids=[int(e) for e in eos],
@@ -126,7 +137,7 @@ def chunks_only(args) -> None:
     from tars_mini import qwen_ref as Q
     out = Path(args.out)
     m = json.loads((out / "manifest.json").read_text())
-    cfg = Q.make_config(Q.CFG_08B, Q.LAYERS_08B, vocab=Q.VOCAB_08B)
+    cfg = model_config(args.ckpt)
     w = Q.load_weights(args.ckpt, cfg, embed=True)          # as export(): the head is tied to it
     low = L.QwenLowering(cfg, w, max_tokens=m["max_tokens"], ddr_bytes=DDR, head=True, queue_cap=m["queue_cap"])
     del w

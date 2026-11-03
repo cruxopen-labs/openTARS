@@ -32,6 +32,17 @@ CFG_08B = dict(
     rope_parameters=dict(rope_type="default", rope_theta=10000000.0, partial_rotary_factor=0.25,
                          mrope_section=[11, 11, 10], mrope_interleaved=True),
 )
+# Qwen3-0.6B (Qwen/Qwen3-0.6B config.json): 28 full-attention layers (no output gate, QK-norm with
+# plain weights, full rotary), tied embeddings, vocabulary 151936
+VOCAB_Q3_06B = 151936
+CFG_Q3_06B = dict(
+    model_type="qwen3", hidden_size=1024, intermediate_size=3072, num_attention_heads=16,
+    num_key_value_heads=8, head_dim=128, rms_norm_eps=1e-6, vocab_size=16, max_position_embeddings=40960,
+    num_hidden_layers=28, rope_parameters=dict(rope_type="default", rope_theta=1000000.0),
+)
+# its small config, for RTL runs (the rotary width = the head dim: a multiple of 32)
+CFG_Q3_SMALL = dict(CFG_Q3_06B, hidden_size=256, intermediate_size=512, num_attention_heads=4,
+                    num_key_value_heads=2, head_dim=64)
 # A small config with the same structure, for RTL runs
 # (16 linear-attention heads as the real model; head dims kept multiples of 16 and the rotary
 # width a multiple of 32, as the contract needs)
@@ -45,7 +56,21 @@ def _torch():
     return torch
 
 
+def is_qwen3(cfg) -> bool:
+    """Qwen3 (every layer full attention, plain RMSNorm weights) rather than Qwen3.5."""
+    return getattr(cfg, "model_type", "") == "qwen3"
+
+
 def make_config(base: dict, layer_types: list[str] | None = None, vocab: int | None = None):
+    if base.get("model_type") == "qwen3":
+        from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+        b = {k: v for k, v in base.items() if k != "model_type"}
+        n = len(layer_types) if layer_types else b.pop("num_hidden_layers")
+        b.pop("num_hidden_layers", None)
+        cfg = Qwen3Config(**dict(b, vocab_size=vocab or b["vocab_size"], tie_word_embeddings=True),
+                          num_hidden_layers=n, layer_types=["full_attention"] * n)
+        cfg._attn_implementation = "eager"
+        return cfg
     from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
     lt = list(layer_types or ["linear_attention", "full_attention"])
     b = dict(base, vocab_size=vocab or base["vocab_size"], tie_word_embeddings=True)
@@ -57,9 +82,12 @@ def make_config(base: dict, layer_types: list[str] | None = None, vocab: int | N
 def _meta_model(cfg):
     """The model's structure without memory (parameter names and shapes)."""
     torch = _torch()
-    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel
+    if is_qwen3(cfg):
+        from transformers.models.qwen3.modeling_qwen3 import Qwen3Model as M
+    else:
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel as M
     with torch.device("meta"):
-        return Qwen3_5TextModel(cfg)
+        return M(cfg)
 
 
 def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndarray]:
@@ -90,6 +118,8 @@ def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndar
             a = rng.uniform(0.5, 1.5, shape)
         elif name.endswith("linear_attn.norm.weight"):
             a = 1 + rng.normal(0, 0.1, shape)
+        elif is_qwen3(cfg):                          # Qwen3: RMSNorm weights around 1
+            a = 1 + rng.normal(0, 0.1, shape)
         else:                                        # zero-centered RMSNorm weights
             a = rng.normal(0, 0.1, shape)
         w[name] = a.astype(np.float32)
@@ -97,6 +127,7 @@ def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndar
 
 
 CKPT_PREFIX = "model.language_model."     # Qwen3_5ForConditionalGeneration's text model
+CKPT_PREFIX_Q3 = "model."                 # Qwen3ForCausalLM's
 
 
 def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
@@ -108,11 +139,12 @@ def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
     from safetensors import safe_open
     torch = _torch()
     shapes = {n: tuple(p.shape) for n, p in _meta_model(cfg).named_parameters()}
+    pre = CKPT_PREFIX_Q3 if is_qwen3(cfg) else CKPT_PREFIX
     w = {}
     for f in sorted(Path(path).glob("*.safetensors")):
         with safe_open(str(f), framework="pt") as st:
             for k in st.keys():
-                name = k[len(CKPT_PREFIX):] if k.startswith(CKPT_PREFIX) else None
+                name = k[len(pre):] if k.startswith(pre) else None
                 if name not in shapes or (name.startswith("embed_tokens") and not embed):
                     continue
                 t = st.get_tensor(k)
@@ -172,7 +204,8 @@ def run_reference(cfg, weights: dict, x: np.ndarray, chunks: list[int], fake_qua
     hw = None
     if head:
         e = weights["embed_tokens.weight"]
-        hw = [quant_weight(e[r:r + HEAD_ROWS].astype(np.float64)) for r in range(0, e.shape[0], HEAD_ROWS)] \
+        hr = head_rows(e.shape[0])
+        hw = [quant_weight(e[r:r + hr].astype(np.float64)) for r in range(0, e.shape[0], hr)] \
             if fake_quant else e
     outs: list[np.ndarray] = []
     hooks = [lay.register_forward_hook(lambda _m, _i, o: outs.append(o.detach().numpy().copy()))
@@ -195,6 +228,16 @@ def run_reference(cfg, weights: dict, x: np.ndarray, chunks: list[int], fake_qua
 
 
 HEAD_ROWS = 62080          # the head's rows per GEMM (N is a 16-bit field): 248320 = 4 x 62080
+
+
+def head_rows(vocab: int) -> int:
+    """The head's rows per GEMM: the vocabulary in the fewest equal blocks of at most 65535 rows,
+    each a multiple of 16 (248320: 62080; 151936: 37984)."""
+    for b in range(1, vocab // 16 + 1):
+        r = vocab // b
+        if vocab % b == 0 and r <= 65535 and r % 16 == 0:
+            return r
+    raise ValueError(f"vocabulary {vocab}: no block split")
 
 
 def head_logits(y: np.ndarray, hw, fake_quant: bool) -> np.ndarray:

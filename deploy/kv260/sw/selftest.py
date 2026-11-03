@@ -3,7 +3,7 @@
   1. the hardware path: small random programs (the RTL regression's generator, some with an
      injected descriptor error) on the core, every byte and the end status against the golden
      model's (data/selftest/)
-  2. the model: Qwen3.5-0.8B token by token on the same prompts the export ran through the golden
+  2. the model (Qwen3.5-0.8B or Qwen3-0.6B) token by token on the same prompts the export ran through the golden
      model (data/expected.json): every step's logits must match bit for bit (SHA-256)
 
     sudo python3 selftest.py [--data ../data] [--quick]
@@ -94,7 +94,7 @@ def main() -> int:
     print("   PASS" if ok1 else "   FAIL")
     if args.hw_only:
         return 0 if ok1 else 1
-    print("2. Qwen3.5-0.8B (logits vs the golden model, bit for bit)")
+    print(f"2. {json.loads((d / 'manifest.json').read_text()).get('model', 'model')} (logits vs the golden model, bit for bit)")
     ok2 = model(dev, d, args.quick, not args.per_token)
     print("   PASS" if ok2 else "   FAIL")
     print("ALL PASS" if ok1 and ok2 else "FAILED")

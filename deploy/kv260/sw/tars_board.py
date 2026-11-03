@@ -1,4 +1,5 @@
-"""TARS-mini on the KV260: the device and the Qwen3.5-0.8B runtime.
+"""TARS-mini on the KV260: the device and the model runtime (Qwen3.5-0.8B or Qwen3-0.6B: whatever the
+export in data/ holds).
 
 Device backends (same interface):
   Fpga    the board: registers through libtmdrv (/dev/mem), a 1 GB hugepage buffer as the core's
@@ -177,7 +178,7 @@ def ensure_hugepages(n: int) -> None:
         raise MemoryError(f"only {got} hugepages of {n} (memory fragmented: reboot, then run this first)")
 
 
-# ---------------------------------------------------------------------- Qwen3.5-0.8B
+# ---------------------------------------------------------------------- the model (data/manifest.json)
 class Qwen:
     """The model's runtime: the DDR image (weights, the zeroed states), one descriptor queue per
     token position (made offline: tools/export_kv260.py), the embedding table (bf16); the host

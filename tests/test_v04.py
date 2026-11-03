@@ -271,3 +271,29 @@ def test_qwen_model_with_head_greedy_matches_transformers():
     for i, (g, r) in enumerate(zip(logits, ref.logits)):
         assert np.abs(g - r).max() <= 1e-5 * np.abs(r).max(), i
         assert int(np.argmax(r)) == ids[len(prompt) + i]
+
+
+def test_qwen3_model_with_head_greedy_matches_transformers():
+    """Qwen3 (every layer full attention, no output gate, plain RMSNorm weights, full rotary):
+    four layers (small dims), final norm, tied head (vocabulary 4096 in one block, and 151936's
+    split checked): greedy decoding on the golden model; logits at every step within 1e-5 of
+    transformers' Qwen3Model with the same W8A8 linears and head, and the same tokens."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    assert Q.head_rows(Q.VOCAB_Q3_06B) == 37984 and Q.head_rows(Q.VOCAB_08B) == Q.HEAD_ROWS
+    cfg = Q.make_config(Q.CFG_Q3_SMALL, ["full_attention"] * 4, vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 25, head=True, queue_cap=4096)
+
+    def run(ddr, q, n):
+        m = Machine(ddr)
+        assert m.run_queue(q, n).done
+        return m.ddr
+    prompt = [5, 77, 901, 12, 3000]
+    ids, logits, _ = low.generate(run, prompt, 3)
+    ref = Q.run_reference(cfg, w, low.embed(ids[:-1]), [len(prompt), 1, 1, 1], fake_quant=True, head=True)
+    for i, (g, r) in enumerate(zip(logits, ref.logits)):
+        assert np.abs(g - r).max() <= 1e-5 * np.abs(r).max(), i
+        assert int(np.argmax(r)) == ids[len(prompt) + i]

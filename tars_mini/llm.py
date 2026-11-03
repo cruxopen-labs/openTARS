@@ -1,6 +1,7 @@
 """v0.4 lowering of Qwen3.5 (Gated DeltaNet "LA" and gated full-attention "FA" layers, the final
 norm and the tied-embedding head) to TARS-mini descriptors, single core, with every state in DDR
-(conv history, DeltaNet states, KV cache).
+(conv history, DeltaNet states, KV cache). Qwen3 (cfg.model_type "qwen3": every layer full
+attention without the output gate, RMSNorm weights used as they are, full rotary) lowers the same way.
 
     low = QwenLowering(cfg, weights, max_tokens=64, head=True)
     low.input(hidden)                           # [T, H] fp32 input embeddings (the host's lookup: low.embed(ids))
@@ -10,8 +11,8 @@ norm and the tied-embedding head) to TARS-mini descriptors, single core, with ev
     low.read_layer(machine, layer, t0, n)       # a layer's output rows; read_final, read_logits
 
 The layers follow cfg.layer_types. Every linear layer is W8A8: ROW_QUANT (per-token INT8 + row
-scales) then GEMM with QM_ROWCOL; the head is the same on the INT8 embedding table in row blocks
-of 62080 (N is a 16-bit field). Every other step is one of the v0.4 fp32 ops (ELT, ROPE, FDOT,
+scales) then GEMM with QM_ROWCOL; the head is the same on the INT8 embedding table in equal row
+blocks of at most 65535 rows (N is a 16-bit field: 248320 = 4 x 62080, 151936 = 4 x 37984). Every other step is one of the v0.4 fp32 ops (ELT, ROPE, FDOT,
 row ops), so the model is data on the device; the host lays out weights, queues descriptors, looks
 up the input embedding and picks the next token from the logits. The recurrence runs in its
 token-by-token form for prefill and decode alike. A layer's temporaries live in a scratch region
@@ -155,17 +156,19 @@ class QwenLowering:
         self.p = self.prog = Dev(ddr_bytes=ddr_bytes)
         c = cfg
         self.H, self.eps = c.hidden_size, c.rms_norm_eps
+        self.q3 = getattr(c, "model_type", "") == "qwen3"
         self.types = list(c.layer_types)
+        assert not self.q3 or set(self.types) == {"full_attention"}
         # LA dims
-        self.nk, self.nv = c.linear_num_key_heads, c.linear_num_value_heads
-        self.dk, self.dv = c.linear_key_head_dim, c.linear_value_head_dim
+        self.nk, self.nv = getattr(c, "linear_num_key_heads", 0), getattr(c, "linear_num_value_heads", 0)
+        self.dk, self.dv = getattr(c, "linear_key_head_dim", 0), getattr(c, "linear_value_head_dim", 0)
         assert self.nk == self.nv, "the GQA repeat of linear attention is not lowered"
         # FA dims
         self.nh, self.nkv, self.hd = c.num_attention_heads, c.num_key_value_heads, c.head_dim
-        self.rot = int(self.hd * c.rope_parameters["partial_rotary_factor"])
+        self.rot = int(self.hd * c.rope_parameters.get("partial_rotary_factor", 1.0))
         self.Tp = pad16(max_tokens)
         self.head = head
-        self.taps = c.linear_conv_kernel_dim
+        self.taps = getattr(c, "linear_conv_kernel_dim", 4)
         # low DDR: the states, the queue region, one layer's scratch (a GEMM's row scales sit at
         # BASE + 16 HDR_RSV, 24 bits: below 256 MiB); the weights after them
         self.vocab = weights["embed_tokens.weight"].shape[0] if head else 0
@@ -185,10 +188,11 @@ class QwenLowering:
         return QLin(self.p.put(qw.q, "i1"), self.p.put(qw.scale), b, qw.n, qw.k)
 
     def gamma1(self, w: np.ndarray, mul: float = 1.0) -> V:
-        """Zero-centered RMSNorm weight: gamma = fp32(1 + w) (as torch: 1.0 + weight.float()),
-        times an exact power of two (the attention scaling folded into q_norm)."""
-        g = (F32(1.0) + np.asarray(w, F32)).astype(F32) * F32(mul)
-        return self.p.const(g)
+        """The RMSNorm weight as gamma: Qwen3.5's zero-centered one, fp32(1 + w) (as torch: 1.0 +
+        weight.float()); Qwen3's, w itself. Times `mul`: the attention scaling folded into q_norm
+        (exact for Qwen3.5's 1/16; Qwen3's 128^-0.5 rounds once, in fp32)."""
+        g = np.asarray(w, F32) if self.q3 else (F32(1.0) + np.asarray(w, F32)).astype(F32)
+        return self.p.const((g * F32(mul)).astype(F32))
 
     def _la_weights(self, L: str) -> dict:
         W, p = self.w, self.p
@@ -218,11 +222,15 @@ class QwenLowering:
     def _fa_weights(self, A: str) -> dict:
         W = self.w
         sa = A + "self_attn."
-        qp = W[sa + "q_proj.weight"].reshape(self.nh, 2, self.hd, self.H)
+        if self.q3:                                            # no output gate
+            q, g = self.lin(W[sa + "q_proj.weight"]), None
+        else:                                                  # per head: the query's rows, then the gate's
+            qp = W[sa + "q_proj.weight"].reshape(self.nh, 2, self.hd, self.H)
+            q, g = self.lin(qp[:, 0].reshape(-1, self.H)), self.lin(qp[:, 1].reshape(-1, self.H))
         return dict(
             ln_in=self.gamma1(W[A + "input_layernorm.weight"]),
             ln_post=self.gamma1(W[A + "post_attention_layernorm.weight"]),
-            q=self.lin(qp[:, 0].reshape(-1, self.H)), g=self.lin(qp[:, 1].reshape(-1, self.H)),
+            q=q, g=g,
             k=self.lin(W[sa + "k_proj.weight"]), v=self.lin(W[sa + "v_proj.weight"]),
             qn=self.gamma1(W[sa + "q_norm.weight"], self.hd ** -0.5), kn=self.gamma1(W[sa + "k_norm.weight"]),
             o=self.lin(W[sa + "o_proj.weight"]),
@@ -236,16 +244,17 @@ class QwenLowering:
                    for i, t in enumerate(self.types)]
         self.final_norm = self.gamma1(self.w["norm.weight"])
         # RoPE table: row t = cos(t * inv_freq), sin(t * inv_freq) (fp32, as torch computes them)
-        th = self.cfg.rope_parameters["rope_theta"]
+        th = F32(self.cfg.rope_parameters["rope_theta"])
         inv = (1.0 / (th ** (np.arange(0, self.rot, 2, dtype=F32) / F32(self.rot)))).astype(F32)
         fr = (np.arange(self.T, dtype=F32)[:, None] * inv[None, :]).astype(F32)
         self.rope_tab = p.const(np.concatenate([np.cos(fr), np.sin(fr)], axis=1).astype(F32))
         # the head: the tied embedding table as INT8 per-channel row blocks
         self.head_lins = []
         if self.head:
-            from .qwen_ref import HEAD_ROWS
+            from .qwen_ref import head_rows
             e = self.w["embed_tokens.weight"]
-            self.head_lins = [self.lin(e[r:r + HEAD_ROWS]) for r in range(0, e.shape[0], HEAD_ROWS)]
+            hr = head_rows(e.shape[0])
+            self.head_lins = [self.lin(e[r:r + hr]) for r in range(0, e.shape[0], hr)]
 
     def embed(self, ids) -> np.ndarray:
         """The host's lookup: input embeddings [len(ids), H] fp32."""
@@ -375,10 +384,12 @@ class QwenLowering:
         h = p.mat(n, self.H)
         p.norm(x, w["ln_in"], self.eps, h)
         hq, hs = p.quant(h)
-        q, g = p.mat(n, nh * hd), p.mat(n, nh * hd)
+        q = p.mat(n, nh * hd)
         k, v = p.mat(n, nkv * hd), vc.rowv(t0, n)
         p.gemm_rc(hq, hs, w["q"], q)
-        p.gemm_rc(hq, hs, w["g"], g)
+        if w["g"] is not None:
+            g = p.mat(n, nh * hd)
+            p.gemm_rc(hq, hs, w["g"], g)
         p.gemm_rc(hq, hs, w["k"], k)
         p.gemm_rc(hq, hs, w["v"], v)                                 # V straight into the cache
         # q / k norm per head (q's gamma carries hd^-0.5), RoPE; K into the cache
@@ -401,9 +412,11 @@ class QwenLowering:
             p.fdot(qv, kmat, sc, nn=False)                           # scores (scaling in q_norm)
             p.softmax_causal(sc, pr, t0 + 1)
             p.fdot(pr, vmat, V(att.off + hh * hd * 4, n, hd, att.ld), nn=True)
-        ga = p.mat(n, nh * hd)
-        p.elt(C.ELT_MUL, g, att, ga, act=C.ACT_SIGMOID)              # attn * sigmoid(gate)
-        aq, as_ = p.quant(ga)
+        if w["g"] is not None:
+            ga = p.mat(n, nh * hd)
+            p.elt(C.ELT_MUL, g, att, ga, act=C.ACT_SIGMOID)          # attn * sigmoid(gate)
+            att = ga
+        aq, as_ = p.quant(att)
         o = p.mat(n, self.H)
         p.gemm_rc(aq, as_, w["o"], o)
         x1 = p.mat(n, self.H)
