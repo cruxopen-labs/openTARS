@@ -1,4 +1,27 @@
-# TARS-mini
+# openTARS
+
+An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B bit-exact on a Xilinx Kria KV260**:
+every logit on the board matches the golden model bit for bit. Decode **0.16 s/token** at a 100 MHz
+core clock (v3.2; 2.6 s/token at v1.0), prefill 0.115 s/token, 86% of the XCK26's LUTs.
+
+| Path | What |
+|---|---|
+| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and Qwen lowering (`llm.py`) |
+| `rtl/` | the core (SystemVerilog; FPGA changes under `` `ifdef TM_FPGA ``) and the KV260 top (`tm_kv260.sv`: AXI-Lite, 4-port 128 B read bridge, page table) |
+| `tests/`, `sim/` | RTL vs golden regressions (Verilator), random queue fuzz, board-like memory model |
+| `fpga/kv260/` | Vivado block design and build (`build.tcl`), device-tree overlay, packaging |
+| `deploy/kv260/` | board software (Kria Ubuntu 22.04): `run.sh`, `setup.sh`, chat and selftest (README in Chinese) |
+| `tools/export_kv260.py` | builds the board's model image from the Hugging Face checkpoint (not in git: ~1.5 GB) |
+| `docs/tars_kv260_history.html` | the project log: ASIC start, FPGA port, every version, lessons (Chinese) |
+
+Quick start on the board: export the model data on a PC (`python tools/export_kv260.py --ckpt <Qwen3.5-0.8B>`),
+copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`.
+
+The original project notes follow.
+
+---
+
+## TARS-mini
 
 The first end-to-end slice of the TARS NPU: one core, INT8 GEMM and ReLU, 512-bit descriptors
 in the V1.3.1 format (VERSION 0x02), bit-exact from descriptor to DDR result, in Python (golden
