@@ -332,7 +332,7 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
     <tr><td>prefill（20 token，4 个一块）</td><td class="n">2.29 s = 0.115 s/token</td><td class="n">0.76 s = 0.038 s/token</td></tr>
     <tr><td>示例对话（31 个位置）</td><td class="n">4.5 s</td><td class="n">1.9 s</td></tr>
   </table></div>
-  <p>decode 快一倍：每 token 读的数据少（镜像 662 vs 887 MiB，词表也小），也没有 DeltaNet 状态的逐头读写。prefill 快三倍：Qwen3.5 的 DeltaNet 递推只能逐 token 做，而注意力可以整块处理。整个移植从下载模型到上板通过约半天，没有动 RTL。</p>
+  <p>decode 快一倍：每 token 读的数据少（镜像 662 vs 887 MiB，词表也小），也没有 DeltaNet 状态的逐头读写。prefill 快三倍：Qwen3.5 的 DeltaNet 递推只能逐 token 做，而注意力可以整块处理。</p>
 </section>
 
 <section id="lessons">
