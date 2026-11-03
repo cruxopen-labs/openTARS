@@ -1,0 +1,142 @@
+[
+ {
+  "workload": "softmax",
+  "R": 8,
+  "ideal": 16785,
+  "dram": 44418,
+  "roof": 15366.15096108767,
+  "amp": 1.0,
+  "lat": 82,
+  "inflight": 32
+ },
+ {
+  "workload": "softmax",
+  "R": 16,
+  "ideal": 16785,
+  "dram": 44418,
+  "roof": 15366.15096108767,
+  "amp": 1.0,
+  "lat": 82,
+  "inflight": 32
+ },
+ {
+  "workload": "layernorm",
+  "R": 8,
+  "ideal": 17335,
+  "dram": 46058,
+  "roof": 15846.225972808252,
+  "amp": 1.0,
+  "lat": 82,
+  "inflight": 32
+ },
+ {
+  "workload": "layernorm",
+  "R": 16,
+  "ideal": 17335,
+  "dram": 46058,
+  "roof": 15846.225972808252,
+  "amp": 1.0,
+  "lat": 82,
+  "inflight": 32
+ },
+ {
+  "workload": "rmsnorm",
+  "R": 8,
+  "ideal": 16995,
+  "dram": 44556,
+  "roof": 15606.18846694796,
+  "amp": 1.0,
+  "lat": 81,
+  "inflight": 32
+ },
+ {
+  "workload": "rmsnorm",
+  "R": 16,
+  "ideal": 16995,
+  "dram": 44556,
+  "roof": 15606.18846694796,
+  "amp": 1.0,
+  "lat": 81,
+  "inflight": 32
+ },
+ {
+  "workload": "gelu_eltwise",
+  "R": 8,
+  "ideal": 17854,
+  "dram": 48803,
+  "roof": 15366.15096108767,
+  "amp": 1.0,
+  "lat": 82,
+  "inflight": 32
+ },
+ {
+  "workload": "gelu_eltwise",
+  "R": 16,
+  "ideal": 17854,
+  "dram": 48803,
+  "roof": 15366.15096108767,
+  "amp": 1.0,
+  "lat": 82,
+  "inflight": 32
+ },
+ {
+  "workload": "gemm_relu",
+  "R": 8,
+  "ideal": 68724,
+  "dram": 118049,
+  "roof": 65536.0,
+  "amp": 11.012185833968012,
+  "lat": 78,
+  "inflight": 32
+ },
+ {
+  "workload": "gemm_relu",
+  "R": 16,
+  "ideal": 18884,
+  "dram": 58365,
+  "roof": 16384.0,
+  "amp": 9.221629855293221,
+  "lat": 101,
+  "inflight": 32
+ },
+ {
+  "workload": "gemm_gelu",
+  "R": 8,
+  "ideal": 68724,
+  "dram": 118049,
+  "roof": 65536.0,
+  "amp": 11.012185833968012,
+  "lat": 78,
+  "inflight": 32
+ },
+ {
+  "workload": "gemm_gelu",
+  "R": 16,
+  "ideal": 18884,
+  "dram": 58365,
+  "roof": 16384.0,
+  "amp": 9.221629855293221,
+  "lat": 101,
+  "inflight": 32
+ },
+ {
+  "workload": "conv3x3",
+  "R": 8,
+  "ideal": 117460,
+  "dram": 156274,
+  "roof": 112896.0,
+  "amp": 12.950092421441774,
+  "lat": 57,
+  "inflight": 32
+ },
+ {
+  "workload": "conv3x3",
+  "R": 16,
+  "ideal": 30854,
+  "dram": 63684,
+  "roof": 28224.0,
+  "amp": 15.425138632162662,
+  "lat": 70,
+  "inflight": 32
+ }
+]

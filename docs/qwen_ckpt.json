@@ -1,0 +1,523 @@
+{
+ "golden": {
+  "prompt": [
+   760,
+   6511,
+   314,
+   9338,
+   369
+  ],
+  "tokens": [
+   11751,
+   13,
+   198,
+   760,
+   6511,
+   314,
+   9338,
+   369,
+   11751,
+   13,
+   198,
+   760,
+   6511,
+   314,
+   9338,
+   369,
+   11751
+  ],
+  "descriptors_per_step": [
+   9642,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730,
+   2730
+  ],
+  "decode_step_ops": {
+   "ROW": 260,
+   "GEMM": 232,
+   "ELT": 1482,
+   "ACT": 72,
+   "FDOT": 672,
+   "ROPE": 12
+  },
+  "decode_step_gemv": 232,
+  "ddr_mib": 759,
+  "seconds": 181
+ },
+ "golden_text": {
+  "prompt": "The capital of France is",
+  "output": " Paris.\nThe capital of France is Paris.\nThe capital of France is Paris"
+ },
+ "reference": {
+  "w8a8": [
+   {
+    "step": 0,
+    "max_abs_diff": 1.3828954696655273,
+    "ref_max": 14.70003604888916,
+    "cos": 0.9984740614891052,
+    "argmax_ref": 11751,
+    "argmax_golden": 11751,
+    "top5_overlap": 5
+   },
+   {
+    "step": 1,
+    "max_abs_diff": 1.0539793968200684,
+    "ref_max": 19.436233520507812,
+    "cos": 0.9974170327186584,
+    "argmax_ref": 13,
+    "argmax_golden": 13,
+    "top5_overlap": 5
+   },
+   {
+    "step": 2,
+    "max_abs_diff": 1.060158371925354,
+    "ref_max": 16.972257614135742,
+    "cos": 0.9977121949195862,
+    "argmax_ref": 198,
+    "argmax_golden": 198,
+    "top5_overlap": 5
+   },
+   {
+    "step": 3,
+    "max_abs_diff": 0.9232738018035889,
+    "ref_max": 16.596940994262695,
+    "cos": 0.9968019127845764,
+    "argmax_ref": 760,
+    "argmax_golden": 760,
+    "top5_overlap": 5
+   },
+   {
+    "step": 4,
+    "max_abs_diff": 0.8239521980285645,
+    "ref_max": 14.596596717834473,
+    "cos": 0.9984456300735474,
+    "argmax_ref": 6511,
+    "argmax_golden": 6511,
+    "top5_overlap": 5
+   },
+   {
+    "step": 5,
+    "max_abs_diff": 1.085080623626709,
+    "ref_max": 21.28395652770996,
+    "cos": 0.9976499676704407,
+    "argmax_ref": 314,
+    "argmax_golden": 314,
+    "top5_overlap": 5
+   },
+   {
+    "step": 6,
+    "max_abs_diff": 1.1121282577514648,
+    "ref_max": 16.524768829345703,
+    "cos": 0.9986342787742615,
+    "argmax_ref": 9338,
+    "argmax_golden": 9338,
+    "top5_overlap": 4
+   },
+   {
+    "step": 7,
+    "max_abs_diff": 1.0223811864852905,
+    "ref_max": 20.157257080078125,
+    "cos": 0.9980827569961548,
+    "argmax_ref": 369,
+    "argmax_golden": 369,
+    "top5_overlap": 5
+   },
+   {
+    "step": 8,
+    "max_abs_diff": 0.9520401954650879,
+    "ref_max": 15.875404357910156,
+    "cos": 0.9990318417549133,
+    "argmax_ref": 11751,
+    "argmax_golden": 11751,
+    "top5_overlap": 5
+   },
+   {
+    "step": 9,
+    "max_abs_diff": 1.008602499961853,
+    "ref_max": 20.340269088745117,
+    "cos": 0.9960764050483704,
+    "argmax_ref": 13,
+    "argmax_golden": 13,
+    "top5_overlap": 4
+   },
+   {
+    "step": 10,
+    "max_abs_diff": 1.0674387216567993,
+    "ref_max": 18.7066650390625,
+    "cos": 0.9968000054359436,
+    "argmax_ref": 198,
+    "argmax_golden": 198,
+    "top5_overlap": 5
+   },
+   {
+    "step": 11,
+    "max_abs_diff": 1.1438801288604736,
+    "ref_max": 18.8365478515625,
+    "cos": 0.9944738745689392,
+    "argmax_ref": 760,
+    "argmax_golden": 760,
+    "top5_overlap": 4
+   },
+   {
+    "step": 12,
+    "max_abs_diff": 1.010696291923523,
+    "ref_max": 18.9179744720459,
+    "cos": 0.9980329871177673,
+    "argmax_ref": 6511,
+    "argmax_golden": 6511,
+    "top5_overlap": 5
+   },
+   {
+    "step": 13,
+    "max_abs_diff": 1.2207260131835938,
+    "ref_max": 23.077695846557617,
+    "cos": 0.9975505471229553,
+    "argmax_ref": 314,
+    "argmax_golden": 314,
+    "top5_overlap": 5
+   },
+   {
+    "step": 14,
+    "max_abs_diff": 1.0727403163909912,
+    "ref_max": 19.973026275634766,
+    "cos": 0.9988291263580322,
+    "argmax_ref": 9338,
+    "argmax_golden": 9338,
+    "top5_overlap": 5
+   },
+   {
+    "step": 15,
+    "max_abs_diff": 1.148409366607666,
+    "ref_max": 22.717927932739258,
+    "cos": 0.9979392886161804,
+    "argmax_ref": 369,
+    "argmax_golden": 369,
+    "top5_overlap": 5
+   },
+   {
+    "step": 16,
+    "max_abs_diff": 1.2418909072875977,
+    "ref_max": 17.73114585876465,
+    "cos": 0.9986298084259033,
+    "argmax_ref": 11751,
+    "argmax_golden": 11751,
+    "top5_overlap": 5
+   }
+  ],
+  "fp32": [
+   {
+    "step": 0,
+    "max_abs_diff": 1.3600964546203613,
+    "ref_max": 14.870590209960938,
+    "cos": 0.9980066418647766,
+    "argmax_ref": 11751,
+    "argmax_golden": 11751,
+    "top5_overlap": 5
+   },
+   {
+    "step": 1,
+    "max_abs_diff": 0.9351174831390381,
+    "ref_max": 19.373943328857422,
+    "cos": 0.9977834820747375,
+    "argmax_ref": 13,
+    "argmax_golden": 13,
+    "top5_overlap": 5
+   },
+   {
+    "step": 2,
+    "max_abs_diff": 0.9521448612213135,
+    "ref_max": 17.44223403930664,
+    "cos": 0.9978359937667847,
+    "argmax_ref": 198,
+    "argmax_golden": 198,
+    "top5_overlap": 4
+   },
+   {
+    "step": 3,
+    "max_abs_diff": 1.2308759689331055,
+    "ref_max": 16.791046142578125,
+    "cos": 0.9935129284858704,
+    "argmax_ref": 760,
+    "argmax_golden": 760,
+    "top5_overlap": 5
+   },
+   {
+    "step": 4,
+    "max_abs_diff": 1.4376270771026611,
+    "ref_max": 15.549877166748047,
+    "cos": 0.9969305992126465,
+    "argmax_ref": 6511,
+    "argmax_golden": 6511,
+    "top5_overlap": 5
+   },
+   {
+    "step": 5,
+    "max_abs_diff": 1.2431097030639648,
+    "ref_max": 21.663970947265625,
+    "cos": 0.995943009853363,
+    "argmax_ref": 314,
+    "argmax_golden": 314,
+    "top5_overlap": 5
+   },
+   {
+    "step": 6,
+    "max_abs_diff": 1.029892921447754,
+    "ref_max": 16.674724578857422,
+    "cos": 0.9986318349838257,
+    "argmax_ref": 9338,
+    "argmax_golden": 9338,
+    "top5_overlap": 5
+   },
+   {
+    "step": 7,
+    "max_abs_diff": 0.9909858703613281,
+    "ref_max": 20.31496238708496,
+    "cos": 0.9979147911071777,
+    "argmax_ref": 369,
+    "argmax_golden": 369,
+    "top5_overlap": 5
+   },
+   {
+    "step": 8,
+    "max_abs_diff": 0.9979845881462097,
+    "ref_max": 15.81252670288086,
+    "cos": 0.9987199902534485,
+    "argmax_ref": 11751,
+    "argmax_golden": 11751,
+    "top5_overlap": 5
+   },
+   {
+    "step": 9,
+    "max_abs_diff": 1.164233684539795,
+    "ref_max": 20.261383056640625,
+    "cos": 0.9961401224136353,
+    "argmax_ref": 13,
+    "argmax_golden": 13,
+    "top5_overlap": 4
+   },
+   {
+    "step": 10,
+    "max_abs_diff": 1.1854737997055054,
+    "ref_max": 18.83281135559082,
+    "cos": 0.9966914653778076,
+    "argmax_ref": 198,
+    "argmax_golden": 198,
+    "top5_overlap": 5
+   },
+   {
+    "step": 11,
+    "max_abs_diff": 1.324951410293579,
+    "ref_max": 18.597030639648438,
+    "cos": 0.9931560158729553,
+    "argmax_ref": 760,
+    "argmax_golden": 760,
+    "top5_overlap": 5
+   },
+   {
+    "step": 12,
+    "max_abs_diff": 0.9291595220565796,
+    "ref_max": 18.72777557373047,
+    "cos": 0.9981967806816101,
+    "argmax_ref": 6511,
+    "argmax_golden": 6511,
+    "top5_overlap": 4
+   },
+   {
+    "step": 13,
+    "max_abs_diff": 1.0609805583953857,
+    "ref_max": 22.9384708404541,
+    "cos": 0.9974719285964966,
+    "argmax_ref": 314,
+    "argmax_golden": 314,
+    "top5_overlap": 5
+   },
+   {
+    "step": 14,
+    "max_abs_diff": 1.119417667388916,
+    "ref_max": 20.149911880493164,
+    "cos": 0.9986802935600281,
+    "argmax_ref": 9338,
+    "argmax_golden": 9338,
+    "top5_overlap": 5
+   },
+   {
+    "step": 15,
+    "max_abs_diff": 1.114089012145996,
+    "ref_max": 22.5335693359375,
+    "cos": 0.9982444047927856,
+    "argmax_ref": 369,
+    "argmax_golden": 369,
+    "top5_overlap": 4
+   },
+   {
+    "step": 16,
+    "max_abs_diff": 1.154292106628418,
+    "ref_max": 18.059314727783203,
+    "cos": 0.9985085129737854,
+    "argmax_ref": 11751,
+    "argmax_golden": 11751,
+    "top5_overlap": 5
+   }
+  ],
+  "layer_by_layer": [
+   {
+    "layer": 0,
+    "type": "line",
+    "max_abs_diff": 1.1920928955078125e-07,
+    "rel": 1.841365954727072e-07
+   },
+   {
+    "layer": 1,
+    "type": "line",
+    "max_abs_diff": 2.384185791015625e-07,
+    "rel": 2.854857339923867e-07
+   },
+   {
+    "layer": 2,
+    "type": "line",
+    "max_abs_diff": 2.384185791015625e-07,
+    "rel": 1.7569133001060034e-07
+   },
+   {
+    "layer": 3,
+    "type": "full",
+    "max_abs_diff": 1.7881393432617188e-07,
+    "rel": 1.6978364922335865e-07
+   },
+   {
+    "layer": 4,
+    "type": "line",
+    "max_abs_diff": 2.682209014892578e-07,
+    "rel": 2.584432253071282e-07
+   },
+   {
+    "layer": 5,
+    "type": "line",
+    "max_abs_diff": 2.384185791015625e-07,
+    "rel": 1.9697222179544907e-07
+   },
+   {
+    "layer": 6,
+    "type": "line",
+    "max_abs_diff": 9.5367431640625e-07,
+    "rel": 2.3643761339400165e-07
+   },
+   {
+    "layer": 7,
+    "type": "full",
+    "max_abs_diff": 1.1920928955078125e-07,
+    "rel": 5.872615453858038e-08
+   },
+   {
+    "layer": 8,
+    "type": "line",
+    "max_abs_diff": 1.7881393432617188e-07,
+    "rel": 9.003937601992103e-08
+   },
+   {
+    "layer": 9,
+    "type": "line",
+    "max_abs_diff": 1.1920928955078125e-07,
+    "rel": 6.13244373651514e-08
+   },
+   {
+    "layer": 10,
+    "type": "line",
+    "max_abs_diff": 1.1920928955078125e-07,
+    "rel": 5.63200501744063e-08
+   },
+   {
+    "layer": 11,
+    "type": "full",
+    "max_abs_diff": 0.0018677739426493645,
+    "rel": 0.0015190923618505945
+   },
+   {
+    "layer": 12,
+    "type": "line",
+    "max_abs_diff": 1.1920928955078125e-07,
+    "rel": 9.940036728435711e-08
+   },
+   {
+    "layer": 13,
+    "type": "line",
+    "max_abs_diff": 1.1920928955078125e-07,
+    "rel": 8.347940141596091e-08
+   },
+   {
+    "layer": 14,
+    "type": "line",
+    "max_abs_diff": 9.5367431640625e-07,
+    "rel": 2.2888980775430602e-07
+   },
+   {
+    "layer": 15,
+    "type": "full",
+    "max_abs_diff": 2.5331974029541016e-07,
+    "rel": 1.4655436211644913e-07
+   },
+   {
+    "layer": 16,
+    "type": "line",
+    "max_abs_diff": 2.384185791015625e-07,
+    "rel": 9.673313813230945e-08
+   },
+   {
+    "layer": 17,
+    "type": "line",
+    "max_abs_diff": 0.0053531453013420105,
+    "rel": 0.00182075235649404
+   },
+   {
+    "layer": 18,
+    "type": "line",
+    "max_abs_diff": 9.5367431640625e-07,
+    "rel": 1.9064915465211582e-07
+   },
+   {
+    "layer": 19,
+    "type": "full",
+    "max_abs_diff": 4.76837158203125e-07,
+    "rel": 1.0016402861325707e-07
+   },
+   {
+    "layer": 20,
+    "type": "line",
+    "max_abs_diff": 0.011059761047363281,
+    "rel": 0.0019903299859679764
+   },
+   {
+    "layer": 21,
+    "type": "line",
+    "max_abs_diff": 4.76837158203125e-07,
+    "rel": 7.951120328756562e-08
+   },
+   {
+    "layer": 22,
+    "type": "line",
+    "max_abs_diff": 0.010118961334228516,
+    "rel": 0.0017243224370012081
+   },
+   {
+    "layer": 23,
+    "type": "full",
+    "max_abs_diff": 2.384185791015625e-06,
+    "rel": 4.0431919642044895e-07
+   }
+  ],
+  "seconds": 314
+ }
+}

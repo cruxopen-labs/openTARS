@@ -1,0 +1,810 @@
+[
+ {
+  "workload": "mlp_l1",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 71371,
+  "roof": 46080.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 875584,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 1440,
+   "g_load_mem": 11520,
+   "g_feed": 51120,
+   "g_epi": 6480,
+   "write": 721
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 46080,
+   "g_epi_mem": 2880
+  },
+  "tiles": 720,
+  "proj": {
+   "A": 107371,
+   "A2": 61291,
+   "A3": 61291,
+   "B": 70651,
+   "AB": 60571
+  },
+  "traffic_floor": 54724,
+  "schedule_floor": 46080,
+  "flight": 2
+ },
+ {
+  "workload": "mlp_l1",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 81473,
+  "roof": 46080.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 875584,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 1440,
+   "g_load_mem": 21588,
+   "g_feed": 51120,
+   "g_epi": 6480,
+   "write": 721
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 46080,
+   "g_epi_mem": 2880
+  },
+  "tiles": 720,
+  "proj": {
+   "A": 107405,
+   "A2": 61325,
+   "A3": 61325,
+   "B": 80753,
+   "AB": 60605
+  },
+  "traffic_floor": 54724,
+  "schedule_floor": 46080,
+  "flight": 16
+ },
+ {
+  "workload": "mlp_l1",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 31971,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 442432,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 368,
+   "g_load_mem": 13728,
+   "g_feed": 14536,
+   "g_epi": 3064,
+   "write": 185
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 23296,
+   "g_epi_mem": 1472
+  },
+  "tiles": 184,
+  "proj": {
+   "A": 42643,
+   "A2": 28107,
+   "A3": 30867,
+   "B": 31851,
+   "AB": 30747
+  },
+  "traffic_floor": 27652,
+  "schedule_floor": 11776,
+  "flight": 2
+ },
+ {
+  "workload": "mlp_l1",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 34581,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 442432,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 368,
+   "g_load_mem": 16304,
+   "g_feed": 14536,
+   "g_epi": 3064,
+   "write": 185
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 23296,
+   "g_epi_mem": 1472
+  },
+  "tiles": 184,
+  "proj": {
+   "A": 42677,
+   "A2": 28141,
+   "A3": 30901,
+   "B": 34461,
+   "AB": 30781
+  },
+  "traffic_floor": 27652,
+  "schedule_floor": 11776,
+  "flight": 16
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 15391,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 71360,
+  "moved_bytes": 213184,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 180,
+   "g_load_mem": 1440,
+   "g_feed": 12150,
+   "g_epi": 720,
+   "g_epi_mem": 720,
+   "write": 91
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 11520,
+   "g_epi_mem": 360
+  },
+  "tiles": 90,
+  "proj": {
+   "A": 24931,
+   "A2": 13411,
+   "A3": 13411,
+   "B": 15391,
+   "AB": 13411
+  },
+  "traffic_floor": 13324,
+  "schedule_floor": 11520,
+  "flight": 2
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 16685,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 71360,
+  "moved_bytes": 213184,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 180,
+   "g_load_mem": 2700,
+   "g_feed": 12150,
+   "g_epi": 720,
+   "g_epi_mem": 720,
+   "write": 91
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 11520,
+   "g_epi_mem": 360
+  },
+  "tiles": 90,
+  "proj": {
+   "A": 24965,
+   "A2": 13445,
+   "A3": 13445,
+   "B": 16685,
+   "AB": 13445
+  },
+  "traffic_floor": 13324,
+  "schedule_floor": 11520,
+  "flight": 16
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 7825,
+  "roof": 4460.0,
+  "roof_kind": "memory",
+  "min_bytes": 71360,
+  "moved_bytes": 116416,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 46,
+   "g_load_mem": 2980,
+   "g_feed": 3289,
+   "g_epi": 360,
+   "g_epi_mem": 1034,
+   "write": 26
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 5824,
+   "g_epi_mem": 8
+  },
+  "tiles": 23,
+  "proj": {
+   "A": 9597,
+   "A2": 6308,
+   "A3": 6653,
+   "B": 30581,
+   "AB": 6837
+  },
+  "traffic_floor": 7276,
+  "schedule_floor": 2944,
+  "flight": 2
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 8181,
+  "roof": 4460.0,
+  "roof_kind": "memory",
+  "min_bytes": 71360,
+  "moved_bytes": 116416,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 46,
+   "g_load_mem": 3302,
+   "g_feed": 3289,
+   "g_epi": 360,
+   "g_epi_mem": 1034,
+   "write": 26
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 5824,
+   "g_epi_mem": 8
+  },
+  "tiles": 23,
+  "proj": {
+   "A": 9631,
+   "A2": 6342,
+   "A3": 6687,
+   "B": 30937,
+   "AB": 6871
+  },
+  "traffic_floor": 7276,
+  "schedule_floor": 2944,
+  "flight": 16
+ },
+ {
+  "workload": "decode",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 133851,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1189952,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 256,
+   "g_load_mem": 1152,
+   "g_feed": 131968,
+   "g_epi": 256,
+   "write": 129
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 73728,
+   "g_epi_mem": 512
+  },
+  "tiles": 128,
+  "proj": {
+   "A": 206683,
+   "A2": 132955,
+   "A3": 132955,
+   "B": 133723,
+   "AB": 132827
+  },
+  "traffic_floor": 74372,
+  "schedule_floor": 131072,
+  "flight": 2
+ },
+ {
+  "workload": "decode",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 135592,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1189952,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 256,
+   "g_load_mem": 2859,
+   "g_feed": 131968,
+   "g_epi": 256,
+   "write": 129
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 73728,
+   "g_epi_mem": 512
+  },
+  "tiles": 128,
+  "proj": {
+   "A": 206717,
+   "A2": 132989,
+   "A3": 132989,
+   "B": 135464,
+   "AB": 132861
+  },
+  "traffic_floor": 74372,
+  "schedule_floor": 131072,
+  "flight": 16
+ },
+ {
+  "workload": "decode",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 71771,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1124416,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 128,
+   "g_load_mem": 4864,
+   "g_feed": 66496,
+   "g_epi": 64,
+   "g_epi_mem": 64,
+   "write": 65
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 69632,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 136859,
+   "A2": 70363,
+   "A3": 71323,
+   "B": 71771,
+   "AB": 71323
+  },
+  "traffic_floor": 70276,
+  "schedule_floor": 65536,
+  "flight": 2
+ },
+ {
+  "workload": "decode",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 72701,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1124416,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 128,
+   "g_load_mem": 5760,
+   "g_feed": 66496,
+   "g_epi": 64,
+   "g_epi_mem": 64,
+   "write": 65
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 69632,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 136893,
+   "A2": 70397,
+   "A3": 71357,
+   "B": 72701,
+   "AB": 71357
+  },
+  "traffic_floor": 70276,
+  "schedule_floor": 65536,
+  "flight": 16
+ },
+ {
+  "workload": "prefill",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 74587,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 1097792,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 512,
+   "g_load_mem": 4096,
+   "g_feed": 67328,
+   "g_epi": 2304,
+   "write": 257
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 65536,
+   "g_epi_mem": 1024
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 136539,
+   "A2": 71003,
+   "A3": 71003,
+   "B": 74331,
+   "AB": 70747
+  },
+  "traffic_floor": 68612,
+  "schedule_floor": 65536,
+  "flight": 2
+ },
+ {
+  "workload": "prefill",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 78205,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 1097792,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 512,
+   "g_load_mem": 7680,
+   "g_feed": 67328,
+   "g_epi": 2304,
+   "write": 257
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 65536,
+   "g_epi_mem": 1024
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 136573,
+   "A2": 71037,
+   "A3": 71037,
+   "B": 77949,
+   "AB": 70781
+  },
+  "traffic_floor": 68612,
+  "schedule_floor": 65536,
+  "flight": 16
+ },
+ {
+  "workload": "prefill",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 36827,
+  "roof": 16384.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 565312,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 128,
+   "g_load_mem": 17152,
+   "g_feed": 17344,
+   "g_epi": 1024,
+   "g_epi_mem": 1024,
+   "write": 65
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 32768,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 51803,
+   "A2": 34459,
+   "A3": 35419,
+   "B": 36827,
+   "AB": 35419
+  },
+  "traffic_floor": 35332,
+  "schedule_floor": 16384,
+  "flight": 2
+ },
+ {
+  "workload": "prefill",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 37757,
+  "roof": 16384.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 565312,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 128,
+   "g_load_mem": 18048,
+   "g_feed": 17344,
+   "g_epi": 1024,
+   "g_epi_mem": 1024,
+   "write": 65
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 32768,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 51837,
+   "A2": 34493,
+   "A3": 35453,
+   "B": 37757,
+   "AB": 35453
+  },
+  "traffic_floor": 35332,
+  "schedule_floor": 16384,
+  "flight": 16
+ },
+ {
+  "workload": "square",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 271195,
+  "roof": 262144.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 4243520,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 512,
+   "g_load_mem": 4096,
+   "g_feed": 263936,
+   "g_epi": 2304,
+   "write": 257
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 262144,
+   "g_epi_mem": 1024
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 529755,
+   "A2": 267611,
+   "A3": 267611,
+   "B": 270939,
+   "AB": 267355
+  },
+  "traffic_floor": 265220,
+  "schedule_floor": 262144,
+  "flight": 2
+ },
+ {
+  "workload": "square",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 274813,
+  "roof": 262144.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 4243520,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 512,
+   "g_load_mem": 7680,
+   "g_feed": 263936,
+   "g_epi": 2304,
+   "write": 257
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 262144,
+   "g_epi_mem": 1024
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 529789,
+   "A2": 267645,
+   "A3": 267645,
+   "B": 274557,
+   "AB": 267389
+  },
+  "traffic_floor": 265220,
+  "schedule_floor": 262144,
+  "flight": 16
+ },
+ {
+  "workload": "square",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 134171,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 2121792,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 128,
+   "g_load_mem": 66304,
+   "g_feed": 66496,
+   "g_epi": 1088,
+   "write": 65
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 131072,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 199323,
+   "A2": 132827,
+   "A3": 133787,
+   "B": 134107,
+   "AB": 133723
+  },
+  "traffic_floor": 132612,
+  "schedule_floor": 65536,
+  "flight": 2
+ },
+ {
+  "workload": "square",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 135101,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 2121792,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 128,
+   "g_load_mem": 67200,
+   "g_feed": 66496,
+   "g_epi": 1088,
+   "write": 65
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 131072,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 199357,
+   "A2": 132861,
+   "A3": 133821,
+   "B": 135037,
+   "AB": 133757
+  },
+  "traffic_floor": 132612,
+  "schedule_floor": 65536,
+  "flight": 16
+ }
+]

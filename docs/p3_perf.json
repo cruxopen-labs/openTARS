@@ -1,0 +1,822 @@
+[
+ {
+  "workload": "mlp_l1",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 525641,
+  "roof": 46080.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 1198144,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 99361,
+   "g_load_mem": 161307,
+   "g_feed": 66240,
+   "g_drain": 12960,
+   "g_epi": 74880,
+   "g_epi_mem": 103603,
+   "write": 7200
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 46080,
+   "g_epi_mem": 23040
+  },
+  "tiles": 720,
+  "proj": {
+   "A": 230490,
+   "A2": 184410,
+   "A3": 169290,
+   "B": 365868,
+   "AB": 80010
+  },
+  "traffic_floor": 74884,
+  "schedule_floor": 46080
+ },
+ {
+  "workload": "mlp_l1",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 1010331,
+  "roof": 46080.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 1198144,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 99361,
+   "g_load_mem": 485381,
+   "g_feed": 66240,
+   "g_drain": 12960,
+   "g_epi": 74880,
+   "g_epi_mem": 264185,
+   "write": 7200
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 46080,
+   "g_epi_mem": 23040
+  },
+  "tiles": 720,
+  "proj": {
+   "A": 230524,
+   "A2": 184444,
+   "A3": 169324,
+   "B": 710049,
+   "AB": 80044
+  },
+  "traffic_floor": 74884,
+  "schedule_floor": 46080
+ },
+ {
+  "workload": "mlp_l1",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 339265,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 787520,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 48689,
+   "g_load_mem": 81487,
+   "g_feed": 22816,
+   "g_drain": 6256,
+   "g_epi": 73024,
+   "g_epi_mem": 103655,
+   "write": 3248
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 23296,
+   "g_epi_mem": 23040
+  },
+  "tiles": 184,
+  "proj": {
+   "A": 151770,
+   "A2": 128954,
+   "A3": 131714,
+   "B": 172152,
+   "AB": 40066
+  },
+  "traffic_floor": 49220,
+  "schedule_floor": 11776
+ },
+ {
+  "workload": "mlp_l1",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 360,
+  "N": 128,
+  "K": 64,
+  "macs": 2949120,
+  "cycles": 663926,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 78400,
+  "moved_bytes": 787520,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 48689,
+   "g_load_mem": 245044,
+   "g_feed": 22816,
+   "g_drain": 6256,
+   "g_epi": 73024,
+   "g_epi_mem": 264725,
+   "write": 3248
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 23296,
+   "g_epi_mem": 23040
+  },
+  "tiles": 184,
+  "proj": {
+   "A": 151804,
+   "A2": 128988,
+   "A3": 131748,
+   "B": 346033,
+   "AB": 40100
+  },
+  "traffic_floor": 49220,
+  "schedule_floor": 11776
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 107990,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 71360,
+  "moved_bytes": 253504,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 24661,
+   "g_load_mem": 40348,
+   "g_feed": 16560,
+   "g_drain": 1620,
+   "g_epi": 10080,
+   "g_epi_mem": 13011,
+   "write": 1620
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 11520,
+   "g_epi_mem": 2880
+  },
+  "tiles": 90,
+  "proj": {
+   "A": 44370,
+   "A2": 32850,
+   "A3": 28440,
+   "B": 87245,
+   "AB": 16560
+  },
+  "traffic_floor": 15844,
+  "schedule_floor": 11520
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 207067,
+  "roof": 11520.0,
+  "roof_kind": "compute",
+  "min_bytes": 71360,
+  "moved_bytes": 253504,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 24661,
+   "g_load_mem": 119843,
+   "g_feed": 16560,
+   "g_drain": 1620,
+   "g_epi": 10080,
+   "g_epi_mem": 32559,
+   "write": 1620
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 11520,
+   "g_epi_mem": 2880
+  },
+  "tiles": 90,
+  "proj": {
+   "A": 44404,
+   "A2": 32884,
+   "A3": 28474,
+   "B": 169217,
+   "AB": 16594
+  },
+  "traffic_floor": 15844,
+  "schedule_floor": 11520
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 63768,
+  "roof": 4460.0,
+  "roof_kind": "memory",
+  "min_bytes": 71360,
+  "moved_bytes": 162368,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 12127,
+   "g_load_mem": 20390,
+   "g_feed": 5704,
+   "g_drain": 782,
+   "g_epi": 10208,
+   "g_epi_mem": 12981,
+   "write": 1486
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 5824,
+   "g_epi_mem": 2880
+  },
+  "tiles": 23,
+  "proj": {
+   "A": 26974,
+   "A2": 21270,
+   "A3": 21615,
+   "B": 41776,
+   "AB": 9079
+  },
+  "traffic_floor": 10148,
+  "schedule_floor": 2944
+ },
+ {
+  "workload": "mlp_l2",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 360,
+  "N": 16,
+  "K": 128,
+  "macs": 737280,
+  "cycles": 124603,
+  "roof": 4460.0,
+  "roof_kind": "memory",
+  "min_bytes": 71360,
+  "moved_bytes": 162368,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 12127,
+   "g_load_mem": 61049,
+   "g_feed": 5704,
+   "g_drain": 782,
+   "g_epi": 10208,
+   "g_epi_mem": 33123,
+   "write": 1486
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 5824,
+   "g_epi_mem": 2880
+  },
+  "tiles": 23,
+  "proj": {
+   "A": 27008,
+   "A2": 21304,
+   "A3": 21649,
+   "B": 83756,
+   "AB": 9113
+  },
+  "traffic_floor": 10148,
+  "schedule_floor": 2944
+ },
+ {
+  "workload": "decode",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 681625,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1189952,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 221441,
+   "g_load_mem": 257869,
+   "g_feed": 188416,
+   "g_drain": 2304,
+   "g_epi": 8832,
+   "g_epi_mem": 2289,
+   "write": 384
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 73728,
+   "g_epi_mem": 512
+  },
+  "tiles": 128,
+  "proj": {
+   "A": 274266,
+   "A2": 200538,
+   "A3": 144090,
+   "B": 672921,
+   "AB": 135386
+  },
+  "traffic_floor": 74372,
+  "schedule_floor": 131072
+ },
+ {
+  "workload": "decode",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 1201026,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1189952,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 221441,
+   "g_load_mem": 773720,
+   "g_feed": 188416,
+   "g_drain": 2304,
+   "g_epi": 8832,
+   "g_epi_mem": 5805,
+   "write": 384
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 73728,
+   "g_epi_mem": 512
+  },
+  "tiles": 128,
+  "proj": {
+   "A": 274300,
+   "A2": 200572,
+   "A3": 144124,
+   "B": 1192322,
+   "AB": 135420
+  },
+  "traffic_floor": 74372,
+  "schedule_floor": 131072
+ },
+ {
+  "workload": "decode",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 601392,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1124416,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 209025,
+   "g_load_mem": 243540,
+   "g_feed": 126976,
+   "g_drain": 2176,
+   "g_epi": 17024,
+   "g_epi_mem": 2305,
+   "write": 256
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 69632,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 216666,
+   "A2": 147034,
+   "A3": 90650,
+   "B": 584432,
+   "AB": 73690
+  },
+  "traffic_floor": 70276,
+  "schedule_floor": 65536
+ },
+ {
+  "workload": "decode",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 1,
+  "N": 1024,
+  "K": 1024,
+  "macs": 1048576,
+  "cycles": 1094942,
+  "roof": 66244.0,
+  "roof_kind": "memory",
+  "min_bytes": 1059904,
+  "moved_bytes": 1124416,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 209025,
+   "g_load_mem": 733465,
+   "g_feed": 126976,
+   "g_drain": 2176,
+   "g_epi": 17024,
+   "g_epi_mem": 5896,
+   "write": 256
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 69632,
+   "g_epi_mem": 512
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 216700,
+   "A2": 147068,
+   "A3": 90684,
+   "B": 1077982,
+   "AB": 73724
+  },
+  "traffic_floor": 70276,
+  "schedule_floor": 65536
+ },
+ {
+  "workload": "prefill",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 534137,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 1212480,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 139777,
+   "g_load_mem": 229427,
+   "g_feed": 94208,
+   "g_drain": 4608,
+   "g_epi": 26624,
+   "g_epi_mem": 36843,
+   "write": 2560
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 65536,
+   "g_epi_mem": 8192
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 201818,
+   "A2": 136282,
+   "A3": 109402,
+   "B": 477323,
+   "AB": 77658
+  },
+  "traffic_floor": 75780,
+  "schedule_floor": 65536
+ },
+ {
+  "workload": "prefill",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 1050002,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 1212480,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 139777,
+   "g_load_mem": 688990,
+   "g_feed": 94208,
+   "g_drain": 4608,
+   "g_epi": 26624,
+   "g_epi_mem": 93111,
+   "write": 2560
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 65536,
+   "g_epi_mem": 8192
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 201852,
+   "A2": 136316,
+   "A3": 109436,
+   "B": 943953,
+   "AB": 77692
+  },
+  "traffic_floor": 75780,
+  "schedule_floor": 65536
+ },
+ {
+  "workload": "prefill",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 281958,
+  "roof": 16384.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 688192,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 67713,
+   "g_load_mem": 114567,
+   "g_feed": 31744,
+   "g_drain": 2176,
+   "g_epi": 26624,
+   "g_epi_mem": 36868,
+   "write": 2176
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 32768,
+   "g_epi_mem": 8192
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 103770,
+   "A2": 72026,
+   "A3": 72986,
+   "B": 221794,
+   "AB": 39706
+  },
+  "traffic_floor": 43012,
+  "schedule_floor": 16384
+ },
+ {
+  "workload": "prefill",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 64,
+  "N": 256,
+  "K": 256,
+  "macs": 4194304,
+  "cycles": 568582,
+  "roof": 16384.0,
+  "roof_kind": "compute",
+  "min_bytes": 116800,
+  "moved_bytes": 688192,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 67713,
+   "g_load_mem": 344162,
+   "g_feed": 31744,
+   "g_drain": 2176,
+   "g_epi": 26624,
+   "g_epi_mem": 93863,
+   "write": 2176
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 32768,
+   "g_epi_mem": 8192
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 103804,
+   "A2": 72060,
+   "A3": 73020,
+   "B": 454985,
+   "AB": 39740
+  },
+  "traffic_floor": 43012,
+  "schedule_floor": 16384
+ },
+ {
+  "workload": "square",
+  "R": 8,
+  "C": 8,
+  "lat": 2,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 1922671,
+  "roof": 262144.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 4358208,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 557569,
+   "g_load_mem": 917434,
+   "g_feed": 376832,
+   "g_drain": 4608,
+   "g_epi": 26624,
+   "g_epi_mem": 36954,
+   "write": 2560
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 262144,
+   "g_epi_mem": 8192
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 681050,
+   "A2": 418906,
+   "A3": 306010,
+   "B": 1865760,
+   "AB": 274266
+  },
+  "traffic_floor": 272388,
+  "schedule_floor": 262144
+ },
+ {
+  "workload": "square",
+  "R": 8,
+  "C": 8,
+  "lat": 16,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 3815437,
+  "roof": 262144.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 4358208,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 557569,
+   "g_load_mem": 2752971,
+   "g_feed": 376832,
+   "g_drain": 4608,
+   "g_epi": 26624,
+   "g_epi_mem": 94149,
+   "write": 2560
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 262144,
+   "g_epi_mem": 8192
+  },
+  "tiles": 256,
+  "proj": {
+   "A": 681084,
+   "A2": 418940,
+   "A3": 306044,
+   "B": 3708480,
+   "AB": 274300
+  },
+  "traffic_floor": 272388,
+  "schedule_floor": 262144
+ },
+ {
+  "workload": "square",
+  "R": 16,
+  "C": 16,
+  "lat": 2,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 922221,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 2244672,
+  "phases": {
+   "fetch": 25,
+   "check": 65,
+   "g_load": 270465,
+   "g_load_mem": 458920,
+   "g_feed": 126976,
+   "g_drain": 2176,
+   "g_epi": 25600,
+   "g_epi_mem": 36842,
+   "write": 1152
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 131072,
+   "g_epi_mem": 8192
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 295258,
+   "A2": 168282,
+   "A3": 169242,
+   "B": 863105,
+   "AB": 136986
+  },
+  "traffic_floor": 140292,
+  "schedule_floor": 65536
+ },
+ {
+  "workload": "square",
+  "R": 16,
+  "C": 16,
+  "lat": 16,
+  "M": 128,
+  "N": 128,
+  "K": 1024,
+  "macs": 16777216,
+  "cycles": 1896030,
+  "roof": 65536.0,
+  "roof_kind": "compute",
+  "min_bytes": 279616,
+  "moved_bytes": 2244672,
+  "phases": {
+   "fetch": 59,
+   "check": 65,
+   "g_load": 270465,
+   "g_load_mem": 1375089,
+   "g_feed": 126976,
+   "g_drain": 2176,
+   "g_epi": 25600,
+   "g_epi_mem": 94448,
+   "write": 1152
+  },
+  "rd_by_phase": {
+   "fetch": 4,
+   "g_load_mem": 131072,
+   "g_epi_mem": 8192
+  },
+  "tiles": 64,
+  "proj": {
+   "A": 295292,
+   "A2": 168316,
+   "A3": 169276,
+   "B": 1782909,
+   "AB": 137020
+  },
+  "traffic_floor": 140292,
+  "schedule_floor": 65536
+ }
+]

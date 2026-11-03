@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>*,*::before,*::after{box-sizing:border-box}:root{color-scheme:light}body{margin:0}img{max-width:100%}</style>
+<title>TARS-mini on KV260</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: single reading column (engineering report), wide tables and charts scroll in place; sticky section nav on top */
+:root{
+  --bg:#f5f7f8; --panel:#ffffff; --fg:#17212b; --muted:#5a6774; --line:#d6dde3;
+  --accent:#0b7a75; --accent-soft:#d9efed; --warn:#b4541a; --warn-soft:#f6e3d6; --bar2:#8aa4b8;
+  --serif:"Noto Serif SC","Songti SC",serif; --sans:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#10161b; --panel:#172028; --fg:#e3e9ee; --muted:#9aa8b4; --line:#2b3843;
+  --accent:#4cc3bb; --accent-soft:#163a3a; --warn:#e6955f; --warn-soft:#3a271b; --bar2:#5d7a90; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10161b; --panel:#172028; --fg:#e3e9ee; --muted:#9aa8b4; --line:#2b3843;
+  --accent:#4cc3bb; --accent-soft:#163a3a; --warn:#e6955f; --warn-soft:#3a271b; --bar2:#5d7a90; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15.5px;line-height:1.75}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--panel)}
+.wrap{max-width:900px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header.hero{padding-block:56px 32px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.08em;color:var(--accent);text-transform:uppercase}
+h1{font-family:var(--serif);font-weight:900;font-size:clamp(30px,5.4vw,46px);line-height:1.2;margin:10px 0 14px;text-wrap:balance}
+h2{font-family:var(--serif);font-weight:900;font-size:26px;line-height:1.3;margin:0 0 6px;text-wrap:balance}
+h3{font-size:17px;font-weight:700;margin:26px 0 6px}
+.lede{font-size:17px;color:var(--muted);max-width:62ch;margin:0}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:28px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+.kpi b{display:block;font-family:var(--mono);font-size:26px;font-weight:500;color:var(--accent);font-variant-numeric:tabular-nums;line-height:1.2}
+.kpi span{font-size:13px;color:var(--muted)}
+nav.toc{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border-bottom:1px solid var(--line)}
+nav.toc .wrap{display:flex;gap:4px 18px;overflow-x:auto;padding-block:10px;font-size:13.5px;white-space:nowrap}
+nav.toc a{color:var(--muted);text-decoration:none}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+section{padding-block:44px 8px}
+.sec-no{font-family:var(--mono);font-size:13px;color:var(--muted)}
+p{margin:10px 0;max-width:68ch}
+ul,ol{padding-left:1.3em;margin:8px 0;max-width:68ch}
+li{margin:4px 0}
+code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
+.tbl{overflow-x:auto;margin:14px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+th{font-size:12.5px;letter-spacing:.04em;color:var(--muted);font-weight:500;background:var(--bg)}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.hl td{background:var(--accent-soft)}
+tr.dead td{color:var(--muted)}
+.tag{display:inline-block;font-family:var(--mono);font-size:12px;padding:0 7px;border-radius:3px;background:var(--accent-soft);color:var(--accent)}
+.tag.w{background:var(--warn-soft);color:var(--warn)}
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:18px 18px 12px;margin:16px 0}
+.chart h4{margin:0 0 4px;font-size:14.5px}
+.chart .cap{font-size:12.5px;color:var(--muted);margin:0 0 12px}
+.row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px;align-items:center;margin:7px 0}
+.row .lb{font-family:var(--mono);font-size:12.5px;color:var(--muted);text-align:right;line-height:1.3}
+.track{position:relative}
+.bar{height:15px;border-radius:2px;background:var(--accent);display:flex;align-items:center}
+.bar.b2{background:var(--bar2);margin-top:3px}
+.bar.over{background:var(--warn)}
+.val{font-family:var(--mono);font-size:12px;margin-left:calc(100% + 6px);white-space:nowrap;color:var(--fg)}
+.cap-line{position:absolute;top:-6px;bottom:-6px;border-left:2px dashed var(--fg);opacity:.55}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:10px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.flow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin:14px 0}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;min-width:0}
+.box h4{margin:0 0 6px;font-size:14px;color:var(--accent);font-family:var(--mono);font-weight:500}
+.box ul{margin:0;font-size:14px}
+.ver{border-top:1px solid var(--line);padding-top:6px;margin-top:22px}
+.ver h3{margin-top:12px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.lessons{counter-reset:l;list-style:none;padding:0}
+.lessons li{counter-increment:l;position:relative;padding-left:2.3em;margin:12px 0}
+.lessons li::before{content:counter(l,decimal-leading-zero);position:absolute;left:0;top:1px;font-family:var(--mono);font-size:13px;color:var(--accent)}
+.note{border-left:3px solid var(--warn);background:var(--warn-soft);padding:10px 14px;border-radius:0 6px 6px 0;font-size:14.5px}
+footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
+@media (max-width:640px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.flow{grid-template-columns:minmax(0,1fr)}.row{grid-template-columns:84px minmax(0,1fr)}.val{font-size:11px}}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+</head>
+<body>
+
+<header class="hero"><div class="wrap">
+  <div class="eyebrow">Project log · 2026-10-31 → 2026-11-03 · XCK26 @ 100 MHz</div>
+  <h1>TARS-mini on KV260：在一块 FPGA 上逐比特跑通 Qwen3.5-0.8B</h1>
+  <p class="lede">从 ASIC 参考设计出发，经过面积压缩、板卡 bring-up 和 7 个上板版本的访存与计算迭代，decode 从 2.6 s/token 降到 0.16 s/token（16 倍）。每一步的 logits 都与 golden 模型逐比特一致。</p>
+  <div class="kpis">
+    <div class="kpi"><b>0.16 s</b><span>decode / token（v1.0 为 2.6 s）</span></div>
+    <div class="kpi"><b>0.115 s</b><span>prefill / token，4 个 token 一块</span></div>
+    <div class="kpi"><b>4.5 s</b><span>31 个位置的示例对话（v1.0 约 80 s）</span></div>
+    <div class="kpi"><b>86.0%</b><span>LUT 占用，100,743 / 117,120</span></div>
+  </div>
+</div></header>
+
+<nav class="toc" aria-label="目录"><div class="wrap">
+  <a href="#asic">1 ASIC 起点</a><a href="#port">2 FPGA 移植</a><a href="#deploy">3 部署方案</a><a href="#iter">4 提速迭代</a><a href="#lessons">5 启示</a><a href="#open">6 未完成</a>
+</div></nav>
+
+<main class="wrap">
+
+<section id="asic">
+  <div class="sec-no">01</div>
+  <h2>ASIC 起点与复现验证</h2>
+  <p>TARS-mini 是 TARS NPU 的第一个端到端切片：单核，接收 512 位描述符（V1.3.1 格式）。它在本项目开始前已完成到契约 v0.4，本项目没有改动它的 ASIC 行为。</p>
+  <div class="tbl"><table>
+    <tr><th>部分</th><th>内容</th></tr>
+    <tr><td>契约</td><td>v0.4。<code>contract.py</code> 和 <code>golden.py</code> 是它的可执行形式，golden 模型里没有任何微架构参数（R、C、NB、OT…），只规定结果比特。</td></tr>
+    <tr><td>RTL</td><td>R×C INT8 输出驻留脉动阵列、epilogue、行引擎（vpu_lane + fold）、扩展单元 tm_xpu（ELT/ROPE/FDOT/QUANT/GEMV）、fp32 流水单元</td></tr>
+    <tr><td>验证体系</td><td>748 个测试；随机队列 fuzz（5 种阵列形状、随机反压和延迟、覆盖断言）；141 个变异体；fp 单元约 60 万向量</td></tr>
+    <tr><td>时序</td><td>ASAP7 + Yosys/ABC + 自写 <code>sta.py</code>，每级 ≤650 ps（1 GHz），最差 644 ps</td></tr>
+    <tr><td>Qwen</td><td>24 层 + head，一个 decode 步 2,730 个描述符；理想端口 57.3 M 周期，LPDDR4X（DRAMsim3）下 76.5 M 周期，1 GHz 时约 76 ms/token</td></tr>
+  </table></div>
+  <h3>本项目中的复现</h3>
+  <ul>
+    <li><b>工具链</b>：在没有 sudo 的 AlmaLinux 8 上装好 Verilator 5.052、Yosys 0.69、sv2v、ASAP7 库和 DRAMsim3。解决了 torch 加载旧 libstdc++、CMake 4 拒绝 DRAMsim3、sv2v 需要 glibc 2.34 三个问题。</li>
+    <li><b>复现结果</b>：333 个非 RTL 测试和 RTL fp 测试通过；golden 全模型生成的 token <code>[14184,156431,220662,75312]</code> 与原记录一致；时序校准为 170 ps 加法器、580 ps 乘法器，文档记录是 167/578 ps。</li>
+    <li><b>真实权重</b>：载入 Qwen3.5-0.8B。golden 输出 " Paris."。与 fp32 transformers 相比，argmax 17/17 一致，logits 余弦相似度最小 0.9932、平均 0.9972；逐层相对误差中位数 1.8e-7。</li>
+    <li><b>没有完成</b>：ASIC 构建的全模型 RTL decode 仿真跑到 1000 万周期时，按要求停掉（跑完要 6–8 小时）。此后 Verilator 默认多线程运行（<code>TM_THREADS</code>）。</li>
+  </ul>
+</section>
+
+<section id="port">
+  <div class="sec-no">02</div>
+  <h2>FPGA 移植：把 604k LUT 压进 117k</h2>
+  <p>所有 FPGA 改动都放在 <code>`ifdef TM_FPGA</code> 下，ASIC 构建的比特和周期都不变。第一次全核综合（R=8、C=2，乘法器改 DSP）需要 603,792 LUT，是 KV260 的 5.2 倍。原因是为 1 GHz 设计的向量通路每周期处理 4 个元素，每个元素槽都带一套完整的 fp32 流水线：全核有 10 个完整激活单元和约 115 个 fadd；hbuf 要多端口异步按字节读，被综合成了触发器。</p>
+
+  <div class="chart" role="img" aria-label="面积压缩各步的 LUT 数，虚线为 KV260 容量 117,120">
+    <h4>面积压缩：每一步的 LUT</h4>
+    <p class="cap">横轴 0–604k，同一比例尺；虚线 = KV260 容量 117,120</p>
+    <div class="row"><div class="lb">起点</div><div class="track"><div class="bar over" style="width:100%"><span class="val" style="margin-left:auto;margin-right:6px;color:#fff">603,792</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">共享 SFU</div><div class="track"><div class="bar over" style="width:50.1%"><span class="val">302,363</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">去重复单元</div><div class="track"><div class="bar over" style="width:43.6%"><span class="val">263,055</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">hbuf→LUTRAM</div><div class="track"><div class="bar over" style="width:19.8%"><span class="val">119,371</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">v1.0 实现</div><div class="track"><div class="bar" style="width:16.6%"><span class="val">100,434</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">v2.0 实现</div><div class="track"><div class="bar" style="width:17.3%"><span class="val">104,672</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">v3.0 实现</div><div class="track"><div class="bar" style="width:17.6%"><span class="val">106,385</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="row"><div class="lb">v3.2 实现</div><div class="track"><div class="bar" style="width:16.7%"><span class="val">100,743（去掉阵列）</span></div><div class="cap-line" style="left:19.4%"></div></div></div>
+    <div class="legend"><span><i style="background:var(--warn)"></i>超出容量</span><span><i style="background:var(--accent)"></i>放得下</span></div>
+  </div>
+
+  <div class="tbl"><table>
+    <tr><th>步骤</th><th>做法</th><th>LUT</th></tr>
+    <tr><td>乘法器改 DSP</td><td>尾数乘法 <code>mul24_cs</code> 改为 <code>ma*mb</code>；下一级只用 ps+pc，结果比特相同</td><td class="n">603,792</td></tr>
+    <tr><td>SFU 内部合并</td><td>GELU/SiLU/sigmoid/exp/softplus 共用一个 exp、一个 recip、一组 fmul/fadd，每个元素沿流水线携带自己的函数码。单个 fpu_act 从 62k 降到 18.5k</td><td class="n">—</td></tr>
+    <tr><td>全核共享 SFU</td><td>10 个激活单元合成 1 个；<code>tm_sfu_port</code> 把各 lane 错开一拍送入。代价是长激活每 W 周期才能发一步，延迟增加 W−1</td><td class="n">302,363</td></tr>
+    <tr><td>去掉重复单元</td><td>关闭行重叠级；softmax 的 exp 改走 SFU；fadd 对齐移位改为乘以 2^(26−d)，放进 DSP</td><td class="n">263,055</td></tr>
+    <tr class="hl"><td>hbuf → LUTRAM</td><td>hbuf 按行拆 bank，用单写口 LUTRAM；队列也改用 LUTRAM。这一步省了 125k LUT</td><td class="n">119,371</td></tr>
+    <tr><td>跨单元共享</td><td>xpu 借用行引擎空闲的 16 个累加器、fold 加法树和 recip；1/N 复用 fold 的 recip</td><td class="n">≈98k（核心）</td></tr>
+    <tr><td>v1.0 实现</td><td>加上 AXI 桥和顶层，WNS +0.186 ns</td><td class="n">100,434</td></tr>
+  </table></div>
+
+  <h3>移植阶段的问题</h3>
+  <div class="tbl"><table>
+    <tr><th>问题</th><th>原因</th><th>解决</th></tr>
+    <tr><td>回归里出现 3 个失败</td><td>6 个 worker 同时用 <code>-j 0</code> 编译，内存耗尽，构建被 OOM 杀掉</td><td>每个 worker 的编译并发改为核数/worker 数</td></tr>
+    <tr><td>softmax 死锁</td><td>关闭行重叠后，<code>r_gb0</code> 和 <code>S_W_RUN</code> 仍按有重叠的方式分派</td><td>两处都加 <code>SFU==0</code> 门控</td></tr>
+    <tr><td>正在送数的 lane 被冲掉</td><td>不用 SFU 的步骤也会重新装载端口</td><td><code>v_sv &lt;= v_con &amp;&amp; v_sneed</code></td></tr>
+    <tr><td>行引擎死锁</td><td><code>`ifndef</code> 吞掉了一个 <code>if</code> 的语句体</td><td>把整个 <code>if</code> 包进去</td></tr>
+    <tr><td>FIFO 读地址不回绕</td><td>先转成 32 位再相加，加法被扩宽</td><td>先截成 LQ 位再扩宽</td></tr>
+    <tr><td>LUTRAM 同周期两个写</td><td>conv 补零和读返回撞在同一周期，LUTRAM 只有一个写口</td><td>补零推迟一拍，只改变周期数</td></tr>
+    <tr><td>测试是否真的走到新路径</td><td>只看"通过"证明不了</td><td>在三个 SFU 端口植入 bug，分别有 4、2、23 个测试失败；SFU 内部植入的 bug 被抓到 6,133/50,029 个向量</td></tr>
+  </table></div>
+</section>
+
+<section id="deploy">
+  <div class="sec-no">03</div>
+  <h2>Qwen 部署：软硬件分工</h2>
+  <p>NPU 执行每 token 全部 2,730 个描述符，包括 24 层 LA/FA、norm 和 tied head。主机只做 embedding 查表和 argmax。不需要内核驱动。</p>
+  <div class="flow">
+    <div class="box"><h4>PC · 离线一次</h4><ul>
+      <li>safetensors → W8A8 量化 → 降级成描述符</li>
+      <li><code>image.bin</code> 887 MiB：权重、状态、scratch</li>
+      <li>每个位置一个预编译队列；分块队列 c8/c4</li>
+      <li>bf16 embedding、tokenizer、expected.json、24 个硬件自检程序</li>
+      <li>aarch64 numpy/tokenizers 离线 wheel</li>
+    </ul></div>
+    <div class="box"><h4>KV260 · Ubuntu 22.04</h4><ul>
+      <li><code>run.sh</code>：确认没人在用 → 释放 hugepage → xmutil 加载 → 确认 fpga0 处于 operating 状态</li>
+      <li>1 GB 模型放在 512 个 2 MB hugepage 中，物理页号从 pagemap 查出，写进核心页表</li>
+      <li><code>libtmdrv.so</code>：通过 /dev/mem 访问寄存器；用 DC CVAC/CIVAC 维护 cache（HP0 不一致）</li>
+      <li><code>qwen_chat.py</code> 对话，<code>selftest.py</code> 逐步比对 logits 哈希</li>
+    </ul></div>
+  </div>
+  <p><b>v1.0 板级结构</b>：Zynq MPSoC → HPM0 → SmartConnect → AXI-Lite 寄存器；核心 m_axi → SmartConnect → HP0（128 位）。AXI 桥每次传输单拍 16 B，有未确认的写时所有读暂停；2 MB 页表把 1 GB 地址空间映射到 hugepage。每 token 读约 912 MB，其中输出层（词表 248,320）约占 28%。</p>
+  <h3>板卡 bring-up 的问题</h3>
+  <div class="tbl"><table>
+    <tr><th>问题</th><th>解决</th></tr>
+    <tr><td>QSPI 里的旧 U-Boot 2020.01 无法启动 Ubuntu 22.04</td><td>用 recovery 工具升级到 K26 BootFW 1.02；第一次 CRC 校验失败，重试成功</td></tr>
+    <tr><td>Etcher 写卡总是失败（write ending unexpectedly）</td><td>廉价读卡器会损坏写入的数据。改在 WSL 里用 usbipd 挂载读卡器，dd 写入后 cmp 校验</td></tr>
+    <tr><td>首次 <code>run.sh hw</code> 时板子挂死（CMA 分配失败，然后 mmc 超时、断网）</td><td>hugepage 先占掉了 CMA，比特流加载静默失败，读 0xA0000000 把总线挂死。改为先加载比特流再分配 hugepage，访问 PL 前检查加载状态</td></tr>
+    <tr><td>在用户对话进行中重载了 PL</td><td>run.sh 发现已有对话或自检进程时拒绝运行；每次上板前先执行 <code>pgrep</code> 检查</td></tr>
+  </table></div>
+  <p><b>v1.0 上板结果</b>：硬件测试 24/24，两个提示词共 43 步全部逐比特一致。速度 2.6 s/token（261 M 周期），是仿真预测的 3 倍：真实 DDR 延迟高，而桥只发单拍 16 B 请求。</p>
+</section>
+
+<section id="iter">
+  <div class="sec-no">04</div>
+  <h2>提速迭代</h2>
+  <p>每一版都上板通过：硬件测试、逐 token 自检和分块自检全部 ALL PASS，每一步逐比特一致。</p>
+
+  <div class="chart" role="img" aria-label="各版本 decode 和 prefill 每 token 秒数">
+    <h4>每 token 时间（秒），板上实测</h4>
+    <p class="cap">横轴 0–2.6 s，同一比例尺。prefill 为 20 个 token 的提示词；v1.0、v1.1 是逐 token</p>
+    <div class="row"><div class="lb">v1.0</div><div class="track"><div class="bar" style="width:100%"><span class="val" style="margin-left:auto;margin-right:6px;color:#fff">2.6</span></div><div class="bar b2" style="width:100%"><span class="val" style="margin-left:auto;margin-right:6px;color:#fff">2.6</span></div></div></div>
+    <div class="row"><div class="lb">v1.1</div><div class="track"><div class="bar" style="width:34.6%"><span class="val">0.90</span></div><div class="bar b2" style="width:34.6%"><span class="val">0.90</span></div></div></div>
+    <div class="row"><div class="lb">v1.3</div><div class="track"><div class="bar" style="width:28.1%"><span class="val">0.73</span></div><div class="bar b2" style="width:12.3%"><span class="val">0.32</span></div></div></div>
+    <div class="row"><div class="lb">v1.4</div><div class="track"><div class="bar" style="width:23.1%"><span class="val">0.60</span></div><div class="bar b2" style="width:7.3%"><span class="val">0.19</span></div></div></div>
+    <div class="row"><div class="lb">v2.0</div><div class="track"><div class="bar" style="width:13.8%"><span class="val">0.36</span></div><div class="bar b2" style="width:5.8%"><span class="val">0.15</span></div></div></div>
+    <div class="row"><div class="lb">v3.0</div><div class="track"><div class="bar" style="width:8.1%"><span class="val">0.21</span></div><div class="bar b2" style="width:4.5%"><span class="val">0.118</span></div></div></div>
+    <div class="row"><div class="lb">v3.2</div><div class="track"><div class="bar" style="width:6.2%"><span class="val">0.16</span></div><div class="bar b2" style="width:4.4%"><span class="val">0.115</span></div></div></div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>decode</span><span><i style="background:var(--bar2)"></i>prefill</span></div>
+  </div>
+
+  <div class="tbl"><table>
+    <tr><th>版本</th><th>主要改动</th><th>decode</th><th>prefill</th><th>示例对话</th><th>周期/token</th><th>LUT</th></tr>
+    <tr><td class="n">v1.0</td><td>单拍 16 B 桥</td><td class="n">2.6 s</td><td class="n">2.6 s</td><td class="n">~80 s</td><td class="n">261 M</td><td class="n">85.8%</td></tr>
+    <tr><td class="n">v1.1</td><td>读突发；读只被地址重叠的写挡住；性能计数器</td><td class="n">0.90 s</td><td class="n">0.90 s</td><td class="n">28.5 s</td><td class="n">90 M</td><td class="n">86.1%</td></tr>
+    <tr class="dead"><td class="n">v1.2</td><td>只加长突发、增加在途读（仅仿真，放弃）</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td class="n">v1.3</td><td>多路交错收集 + 重排序缓冲；在途读 128；标量不重读；批量 GEMV</td><td class="n">0.73 s</td><td class="n">0.32 s</td><td class="n">14.8 s</td><td class="n">73 M</td><td class="n">87.5%</td></tr>
+    <tr><td class="n">v1.4</td><td>写突发合并，同拍按字节合并，16 个写突发在途</td><td class="n">0.60 s</td><td class="n">0.19 s</td><td class="n">10.7 s</td><td class="n">60 M</td><td class="n">—</td></tr>
+    <tr><td class="n">v2.0</td><td>32 B 读口；HP0 200 MHz；GEMV 每拍 32 B；PE 改 DSP</td><td class="n">0.36 s</td><td class="n">0.15 s</td><td class="n">7.1 s</td><td class="n">36 M</td><td class="n">89.4%</td></tr>
+    <tr><td class="n">v3.0</td><td>64 B 读口；按 1 KB 交错分到 HP0+HP3，各 250 MHz，异步 FIFO 直连；GEMV 每拍 64 B、一次 4 行</td><td class="n">0.21 s</td><td class="n">0.118 s</td><td class="n">4.9 s</td><td class="n">21.0 M</td><td class="n">90.8%</td></tr>
+    <tr class="dead"><td class="n">v3.1</td><td>去掉脉动阵列，GEMM 全走 GEMV（仅仿真，并入 v3.2）</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr class="hl"><td class="n">v3.2</td><td>无阵列；128 B 读口，四个 HP 口；GEMV 每拍 128 B；权重 128 B 对齐</td><td class="n">0.16 s</td><td class="n">0.115 s</td><td class="n">4.5 s</td><td class="n">15.7 M</td><td class="n">86.0%</td></tr>
+  </table></div>
+
+  <div class="ver"><h3><span class="tag">v1.1</span>读突发</h3>
+    <p><b>改动</b>：读请求先进输入寄存器（消除 <code>mr_addr→mr_ready</code> 组合环），连续地址攒成最多 16 拍的突发，不跨 4 KB。写队列带年龄掩码，只有真正和未完成写地址重叠的读才等待。新增 7 个性能计数器。</p>
+    <p><b>效果</b>：AXI 读事务从 57 M 降到 18 M，平均每个突发 3.1 拍。仿真只快 18%，板上快了 2.9 倍：仿真模型低估了真实 DDR 处理零碎请求的代价。</p>
+    <p><b>分块 prefill</b>：结果逐比特正确，但板上更慢（1.6–1.8 s/token）。M≥2 走 8×2 阵列，受算力限制，激活值要为每 2 列输出重读一遍。当时默认关闭。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag w">v1.2</span><span class="tag">v1.3</span>先找准瓶颈</h3>
+    <p><b>v1.2 放弃</b>：只做"更长突发 + 更多在途读"，仿真里几乎没有收益。</p>
+    <p><b>定位</b>：建了贴近板子的仿真内存模型（<code>+nout=16 +blat=50</code>，1.55 周期/拍，板上实测 1.58）。发现约 1/3 时间花在 LA 状态更新：3 路交错读，每个突发只有 1 拍，被 HP 口在途突发数限制在 0.33 拍/周期。</p>
+    <p><b>桥</b>：4 路交错流各自收集成突发，平均约 25 拍，BRAM 重排序缓冲按原顺序把数据还给核心；在途读从 64 增加到 128；ELT 的标量操作数不再每拍重读。</p>
+    <p><b>为什么不放大阵列</b>：PE 改 DSP 后，16×8 阵列仍要 133k LUT（114%），因为 epilogue、行读出 mux 和 loader 表都随 R/C 增长。改做批量 GEMV：权重只读一次，每拍 16 个权重同时乘最多 8 个 token。8 个 token 一块时，每 token 比 decode 快 3.3 倍。分块大小相应改成 8/4。</p>
+    <p><b>上板</b>：decode 只快 19%，仿真预期 29%。计数器显示写成了新瓶颈：每 token 有 16 M 周期在等写。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">v1.4</span>写突发</h3>
+    <p>连续的写攒成最多 16 拍的突发，GEMV 逐元素的 4 B 写按字节使能合并成整拍，最多 16 个写突发在途；读写冒险按 16 B 精度检查。写等待从 16 M 降到 0.15 M 周期，decode 快 18%，与事先预测的 15–20% 吻合。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">v2.0</span>32 B 读口</h3>
+    <p><b>改动</b>：桥改成 32 B 拍，两个 16 B 半拍共享一个重排序槽；pl_clk1 = 200 MHz 驱动 HP0，SmartConnect 做 256→128 位宽和时钟转换，设备树覆盖里加 <code>clocking1</code>；GEMV 增加 WIDE 模式，每拍 32 B。</p>
+    <p><b>问题 1</b>：第一版反而更慢。突发上限 64 个 32 B 拍正好耗光 128 个在途读信用，把上限改为 16 拍解决。</p>
+    <p><b>问题 2</b>：第一次实现时 LUT 到 94.2%，布局失败。瘦身措施：阵列 PE 改 DSP；阵列 loader 的在途读降到 32（GEMV 和行引擎保持 128）；请求队列 NQ=256；GEMV 窄模式放置 mux 从 8 路合成 1 路；再加 AreaOptimized_high 综合策略。最终 LUT 89.4%，WNS +0.086 ns，DSP 668，BRAM 40.5。</p>
+    <p><b>效果</b>：decode 快 40%，36.4 M 周期/token。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">测量</span>DDR 带宽实测</h3>
+    <p>v2.0 只用了 KV260 DDR4 理论带宽（19.2 GB/s）的约 1/6。在继续加宽读口之前，先单独做了一个比特流 <code>fpga/kv260_ddrbw</code>：四个 AXI 流量发生器分别直连 HP0–HP3，在 200 / 250 / 333 MHz 下测读写带宽。</p>
+    <div class="tbl"><table>
+      <tr><th>结论</th><th>数据</th></tr>
+      <tr><td>每个 HP 口的上限 = 16 B × 时钟</td><td class="n">3.2 GB/s @200，4.0 @250，5.2 @333</td></tr>
+      <tr><td>每口约 70 M 事务/秒，短突发吃亏</td><td>16 B 单拍突发只有 1.15 GB/s，要长突发才能跑满</td></tr>
+      <tr><td>HP1 和 HP2 共用一个 DDRC 端口</td><td class="n">两者合计最多 8.3 GB/s</td></tr>
+      <tr><td>四口并用最好</td><td class="n">12.3–12.8 GB/s（200–250 MHz）；333 MHz 反而降到 10.7</td></tr>
+      <tr><td>空载读延迟</td><td class="n">约 140–155 ns</td></tr>
+    </table></div>
+    <p>所以带宽的路线是：<b>多口并行 + 250 MHz + 长突发</b>，而不是提高单口时钟。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">v3.0</span>双口 64 B</h3>
+    <p><b>改动</b>：核心读口加宽到 64 B/拍；桥按物理地址第 10 位把突发分给两个读主口，HP0 和 HP3 各 128 位 @ 250 MHz，通过核心顶层内的 <code>tm_hpr</code>（异步 FIFO）跨时钟，不经过 SmartConnect；写口 256 位经 SmartConnect 到 HP1。GEMV 一次处理 4 行、每拍 64 B 权重，prefill 分块随之改为 4 个 token。</p>
+    <p><b>问题</b>：AR FIFO 用 LUTRAM 时出现跨时钟路径，改成 BRAM；DDR 测试比特流里设备树把 HPM0 设成了 128 位而设计是 32 位，寄存器读到错的字节，改 afi 配置解决。</p>
+    <p><b>效果</b>：decode 0.36 → 0.21 s/token，读延迟 66 周期；LUT 升到 90.8%，已经贴墙。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">分析</span>LUT 从哪里来：FP16 还是去掉阵列</h3>
+    <p>v3.0 的仿真剖析：GEMV 占 53% 时间，接近每周期 1 拍；ELT 25%、FDOT 17.5%，只有 0.2–0.3 拍/周期。要再快，读口必须再加宽，但 LUT 只剩 9%。</p>
+    <p><b>FP16 lane 可行吗</b>：在 transformers 里把 Gated DeltaNet 递推换成逐 token 循环，测 2,048 token 英文和 1,642 token 中文。只把状态存成 FP16 时，top-1 一致率 97–100%，KL 约 1e-3；全 FP16 运算也接近。BF16 状态明显差一档（top-1 94%，NLL +0.05）。这些偏差都远小于现有 W8A8 量化本身（top-1 83–92%）。<b>但</b> fp32 单元已经共享过，换成 FP16 省不了多少 LUT，而且会破坏现有契约的逐比特一致。</p>
+    <p><b>选择</b>：Qwen 不用 conv，GEMM 都能用 GEMV 分批完成，所以去掉脉动阵列（核心参数 <code>ARR=0</code>）。conv 和 K &gt; 4096 的 GEMM 返回 E_OPCODE，golden 模型加了对应的 <code>gemv_only</code> 配置，契约其余部分不变。综合 LUT 从 101k 降到 89k，腾出的空间用来加宽读口。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">v3.2</span>四口 128 B，无阵列</h3>
+    <p><b>改动</b>：核心读口 128 B/拍；桥按物理地址 [11:10] 把 1 KB 突发分到四个读主口：HP0、HP3、HP2 直连，第四口和写口经 SmartConnect 到 HP1；重排序缓冲拆成高低两个 512 位 bank，两个通道各取一半；GEMV 每拍 128 B、一次 4 行；编译器分配对齐从 64 B 改为 128 B。</p>
+    <p><b>问题 1</b>：ARR=0 后 softmax M=2 只算了 1 行。GEMV 的分批行数上限误用到了行操作上，限定只对 GEMV 生效。</p>
+    <p><b>问题 2</b>：完整回归 32 个失败，全是 ELT/ROPE/行操作挂死。读突发上限从 16 拍改成 8 拍时，写突发计数器共用了同一个位宽参数，16 拍的写回绕成 0，发出 awlen=255。写计数器改用自己的位宽。</p>
+    <p><b>问题 3</b>：板上自检的随机程序仍按"有阵列"生成，conv 被硬件正确拒绝，却被判失败。导出脚本改按 <code>gemv_only</code> 生成。</p>
+    <p><b>问题 4</b>：重启后 hugepage 分配失败。Linux 把一个 hugepage 放在了物理地址 0，而驱动把 PFN 0 当成"非 root 读不到页号"。ZynqMP 的 DDR 从 0 开始，PFN 0 是合法的，修正检查并在板上重编 <code>libtmdrv.so</code>。另外板子连续运行两天后内存碎片化，凑不齐 528 个 hugepage，需要重启。</p>
+    <p><b>效果</b>：回归 386 通过 / 22 跳过（conv 与阵列专用用例），核心 testbench 425/425；时序 WNS +0.176 ns，LUT 86.0%，DSP 879，BRAM 118。板上 ALL PASS，decode 15.7 M 周期 = <b>0.16 s/token</b>，示例对话 4.5 s。prefill 几乎没变（0.115 s），因为分块 GEMV 已受算力而非带宽限制。</p>
+  </div>
+
+  <h3>每一版固定的验证流程</h3>
+  <ol>
+    <li>修改 RTL，lint。</li>
+    <li>两套 RTL 回归各 416 项：核心 testbench，以及经 KV260 顶层、页面打乱、AXI 随机延迟。</li>
+    <li>用板级内存模型跑 2 层真实维度模型：逐比特一致，并测周期数。</li>
+    <li>Vivado 实现，打包 bit.bin 和 dtbo。</li>
+    <li>上板依次跑硬件测试、逐 token 自检、分块自检，全部 ALL PASS 后才替换默认固件。旧固件保留在 <code>firmware_v1/_v11/_v14/_v20/_v30</code>。</li>
+  </ol>
+</section>
+
+<section id="lessons">
+  <div class="sec-no">05</div>
+  <h2>给未来迭代的启示</h2>
+  <h3>方法</h3>
+  <ol class="lessons">
+    <li><b>契约和 golden 是大胆优化的底气。</b>golden 里没有微架构参数，所以共享 SFU、关闭行重叠、改桥、改读口宽度都只改变周期，可以放心做，最后用逐比特对比兜底。</li>
+    <li><b>验证要证明自己测到了改动。</b>每加一条新路径就植入一个 bug，看测试能否抓到。SFU、三个端口和 loader 测试的问题都是这样发现的。</li>
+    <li><b>先测量瓶颈，再选方案。</b>v1.2 盲目加长突发没有收益；有了计数器和校准过的模型，v1.4 预测快 15–20%，实测 18%。性能计数器应该从第一版比特流就带上。</li>
+    <li><b>仿真内存模型必须对齐真机。</b>理想端口预测 0.85 s/token，真机是 2.6 s。换新平台时，第一件事是实测延迟和带宽，再用它校准模型。</li>
+  </ol>
+  <h3>FPGA 架构</h3>
+  <ol class="lessons" start="5" style="counter-reset:l 4">
+    <li><b>ASIC 的"每个 lane 一套完整 fp 流水线"在 FPGA 上不可行。</b>到 100 MHz 要反过来用时间换面积：共享 SFU，用 LUTRAM 和 BRAM 存储，跨单元借用空闲的加法器和 recip。</li>
+    <li><b>存储结构决定面积。</b>hbuf 一项就占 125k LUT。从一开始就按单写口 LUTRAM 或 BRAM 加寄存读来写存储。</li>
+    <li><b>LUT 是墙，DSP 相对宽裕（v3.2 用 879/1248）。</b>要提算力，优先选"权重只读一次、乘法放 DSP"的形状，而不是放大阵列。为目标模型删掉用不到的通用单元（v3.2 去掉阵列省了约 12k LUT）比精打细算更有效；代价是通用性，要在契约和 golden 里显式写成一种配置。</li>
+    <li><b>decode 受带宽限制，而带宽要按平台实测来规划。</b>先用独立比特流测出"每口 16 B × 时钟、四口最好、HP1/HP2 共享"，v3.0 和 v3.2 的设计都直接来自这张表。后续方向：INT4 权重（需要新契约）、把 LA 递推状态放到片上、ELT/FDOT 也用宽读口。</li>
+  </ol>
+  <h3>工程和板上操作</h3>
+  <ol class="lessons" start="9" style="counter-reset:l 8">
+    <li><b>机器资源要算账。</b>31 GB 内存上同时跑 Vivado、多个 Verilator 构建和长仿真会被 OOM 打断。控制编译并发，大任务错开运行。</li>
+    <li><b>不用会匹配到自己的 <code>pgrep -f</code>/<code>pkill -f</code>。</b>改用 <code>ps aux | grep "[p]attern"</code>，或者按 PID 操作。</li>
+    <li><b>构建或回归运行期间不改 RTL</b>，否则各个构建会读到不同版本的源码。</li>
+    <li><b>上板前确认没有人在用 PL。</b>重载比特流会清空页表，正在跑的进程会访问错误的物理地址。</li>
+    <li><b>Linux 侧的顺序依赖要写成脚本检查。</b>先加载比特流再分配 hugepage；访问 PL 前确认 fpga0 处于 operating 状态。仿真覆盖不到这类问题。</li>
+    <li><b>改一个参数时，查清所有共用它的地方。</b>v3.2 的读突发上限和写计数器共用一个位宽参数，只改读侧就让写侧溢出。不同用途的宽度应各自定义。</li>
+    <li><b>板上的"不可能"值要按平台核实。</b>"物理页号 0 不可能出现"在 x86 上大致成立，在 ZynqMP 上不成立；这个隐患从 v1.0 就存在，直到某次重启后才触发。</li>
+  </ol>
+</section>
+
+<section id="open">
+  <div class="sec-no">06</div>
+  <h2>未完成或未验证</h2>
+  <div class="note">
+    <ul>
+      <li>移植副本 <code>tars_mini_fpga</code> 的 ASIC 构建回归没有跑完：内存不足时被系统中止于 35%，有 2 个失败还没诊断。原 <code>tars_mini</code> 的 ASIC 构建不受影响。</li>
+      <li>本项目没有重新跑完 ASIC 构建的全模型 RTL decode 仿真。FPGA 构建的全模型已在 RTL 上做过逐比特验证。</li>
+      <li>FPGA 改动后没有重跑 <code>mutate_rtl.py</code> 全量变异测试，只对新路径做了植入 bug 检查。</li>
+      <li>v3.2 比特流不再支持 conv 和 K &gt; 4096 的 GEMM（返回 E_OPCODE）。需要它们时可以换回 v3.0 固件（<code>firmware_v30</code>、<code>data_v30</code>），ASIC 构建不受影响。</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+<footer><div class="wrap">TARS-mini · KV260（XCK26）· Vivado 2025.2 · 所有速度为板上实测，100 MHz 核心时钟。完整记录：<code>tars_mini_fpga/docs/project_history.md</code></div></footer>
+</body>
+</html>

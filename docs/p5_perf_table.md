@@ -1,0 +1,30 @@
+| workload | array | lat | cycles | roofline | % of roof | traffic / min |
+|---|---|---|---:|---:|---:|---:|
+| softmax | 8x8 | 2 | 16,737 | 16,388 (memory) | 97.9% | 1.0x |
+| softmax | 8x8 | 16 | 16,785 | 16,388 (memory) | 97.6% | 1.0x |
+| softmax | 16x16 | 2 | 16,737 | 16,388 (memory) | 97.9% | 1.0x |
+| softmax | 16x16 | 16 | 16,785 | 16,388 (memory) | 97.6% | 1.0x |
+| layernorm | 8x8 | 2 | 17,259 | 16,900 (memory) | 97.9% | 1.0x |
+| layernorm | 8x8 | 16 | 17,335 | 16,900 (memory) | 97.5% | 1.0x |
+| layernorm | 16x16 | 2 | 17,259 | 16,900 (memory) | 97.9% | 1.0x |
+| layernorm | 16x16 | 16 | 17,335 | 16,900 (memory) | 97.5% | 1.0x |
+| rmsnorm | 8x8 | 2 | 16,933 | 16,644 (memory) | 98.3% | 1.0x |
+| rmsnorm | 8x8 | 16 | 16,995 | 16,644 (memory) | 97.9% | 1.0x |
+| rmsnorm | 16x16 | 2 | 16,933 | 16,644 (memory) | 98.3% | 1.0x |
+| rmsnorm | 16x16 | 16 | 16,995 | 16,644 (memory) | 97.9% | 1.0x |
+| gelu_eltwise | 8x8 | 2 | 16,924 | 16,388 (memory) | 96.8% | 1.3x |
+| gelu_eltwise | 8x8 | 16 | 17,854 | 16,388 (memory) | 91.8% | 1.3x |
+| gelu_eltwise | 16x16 | 2 | 16,924 | 16,388 (memory) | 96.8% | 1.3x |
+| gelu_eltwise | 16x16 | 16 | 17,854 | 16,388 (memory) | 91.8% | 1.3x |
+| gemm_relu | 8x8 | 2 | 68,578 | 65,536 (compute) | 95.6% | 5.1x |
+| gemm_relu | 8x8 | 16 | 68,724 | 65,536 (compute) | 95.4% | 5.1x |
+| gemm_relu | 16x16 | 2 | 18,794 | 16,384 (compute) | 87.2% | 2.7x |
+| gemm_relu | 16x16 | 16 | 18,884 | 16,384 (compute) | 86.8% | 2.7x |
+| gemm_gelu | 8x8 | 2 | 68,578 | 65,536 (compute) | 95.6% | 5.1x |
+| gemm_gelu | 8x8 | 16 | 68,724 | 65,536 (compute) | 95.4% | 5.1x |
+| gemm_gelu | 16x16 | 2 | 18,794 | 16,384 (compute) | 87.2% | 2.7x |
+| gemm_gelu | 16x16 | 16 | 18,884 | 16,384 (compute) | 86.8% | 2.7x |
+| conv3x3 | 8x8 | 2 | 117,370 | 112,896 (compute) | 96.2% | 15.4x |
+| conv3x3 | 8x8 | 16 | 117,460 | 112,896 (compute) | 96.1% | 15.4x |
+| conv3x3 | 16x16 | 2 | 30,792 | 28,224 (compute) | 91.7% | 7.8x |
+| conv3x3 | 16x16 | 16 | 30,854 | 28,224 (compute) | 91.5% | 7.8x |

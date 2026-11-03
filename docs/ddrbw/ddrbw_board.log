@@ -1,0 +1,175 @@
+=== tgen200 ===
+pl_clk0 200.0 MHz: one HP port's ceiling 3.20 GB/s; DDR4-2400 x64 peak 19.2 GB/s
+
+[1] latency, one burst at a time (HP0)
+  read    16 B: AR->first R avg 31 cyc = 153 ns (min 29, max 108)
+  read    64 B: AR->first R avg 30 cyc = 152 ns (min 29, max 105)
+  read   256 B: AR->first R avg 31 cyc = 155 ns (min 29, max 103)
+  write   64 B: AW->B avg 24 cyc = 120 ns
+
+[2] HP0 reads, GB/s: rows = burst bytes, columns = bursts in flight
+    burst      1      2      4      8     16     32     64
+      16B   0.10   0.20   0.41   0.81   1.15   1.15   1.15
+      32B   0.20   0.40   0.79   1.58   2.26   2.26   2.26
+      64B   0.37   0.74   1.49   2.94   3.11   3.20   3.20
+     128B   0.66   1.32   2.69   3.11   3.20   3.20   3.20
+     256B   1.09   2.18   3.09   3.20   3.20   3.20   3.20
+     512B   1.62   3.07   3.19   3.20   3.20   3.20   3.20
+    1024B   2.12   3.17   3.20   3.20   3.20   3.20   3.20
+    2048B   2.56   3.20   3.20   3.20   3.20   3.20   3.20
+    4096B   2.82   3.20   3.20   3.20   3.20   3.20   3.20
+
+[3] each port alone, reads (256 B bursts, 32 in flight) and writes
+  HP0: read 3.20 GB/s (lat 1342 ns), write 3.20 GB/s
+  HP1: read 3.20 GB/s (lat 1342 ns), write 3.20 GB/s
+  HP2: read 3.20 GB/s (lat 1342 ns), write 3.20 GB/s
+  HP3: read 3.20 GB/s (lat 1342 ns), write 3.20 GB/s
+
+[4] ports together, 256 B bursts, 32 in flight: reads / writes
+  HP0                read  3.20 GB/s ( 17%) [HP0 3.20]   write  3.20 GB/s ( 17%)
+  HP0+HP3            read  6.37 GB/s ( 33%) [HP0 3.19 HP3 3.19]   write  6.40 GB/s ( 33%)
+  HP0+HP1            read  6.37 GB/s ( 33%) [HP0 3.19 HP1 3.19]   write  6.40 GB/s ( 33%)
+  HP1+HP2            read  6.35 GB/s ( 33%) [HP1 3.17 HP2 3.17]   write  6.40 GB/s ( 33%)
+  HP0+HP1+HP3        read  9.52 GB/s ( 50%) [HP0 3.18 HP1 3.17 HP3 3.18]   write  9.23 GB/s ( 48%)
+  HP0+HP2+HP3        read  9.51 GB/s ( 50%) [HP0 3.17 HP2 3.17 HP3 3.17]   write  9.22 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 12.30 GB/s ( 64%) [HP0 3.18 HP1 3.08 HP2 3.08 HP3 3.18]   write 12.63 GB/s ( 66%)
+
+[4] ports together, 1024 B bursts, 16 in flight: reads / writes
+  HP0                read  3.20 GB/s ( 17%) [HP0 3.20]   write  3.20 GB/s ( 17%)
+  HP0+HP3            read  6.37 GB/s ( 33%) [HP0 3.19 HP3 3.19]   write  6.40 GB/s ( 33%)
+  HP0+HP1            read  6.37 GB/s ( 33%) [HP0 3.19 HP1 3.19]   write  6.40 GB/s ( 33%)
+  HP1+HP2            read  6.35 GB/s ( 33%) [HP1 3.17 HP2 3.17]   write  6.40 GB/s ( 33%)
+  HP0+HP1+HP3        read  9.54 GB/s ( 50%) [HP0 3.18 HP1 3.18 HP3 3.18]   write  9.22 GB/s ( 48%)
+  HP0+HP2+HP3        read  9.54 GB/s ( 50%) [HP0 3.18 HP2 3.18 HP3 3.18]   write  9.22 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 12.30 GB/s ( 64%) [HP0 3.18 HP1 3.08 HP2 3.08 HP3 3.18]   write 12.65 GB/s ( 66%)
+
+[4] ports together, 4096 B bursts, 8 in flight: reads / writes
+  HP0                read  3.20 GB/s ( 17%) [HP0 3.20]   write  3.20 GB/s ( 17%)
+  HP0+HP3            read  6.37 GB/s ( 33%) [HP0 3.19 HP3 3.19]   write  6.40 GB/s ( 33%)
+  HP0+HP1            read  6.37 GB/s ( 33%) [HP0 3.19 HP1 3.19]   write  6.40 GB/s ( 33%)
+  HP1+HP2            read  6.35 GB/s ( 33%) [HP1 3.17 HP2 3.17]   write  6.40 GB/s ( 33%)
+  HP0+HP1+HP3        read  9.55 GB/s ( 50%) [HP0 3.19 HP1 3.19 HP3 3.18]   write  9.22 GB/s ( 48%)
+  HP0+HP2+HP3        read  9.55 GB/s ( 50%) [HP0 3.19 HP2 3.18 HP3 3.18]   write  9.22 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 12.31 GB/s ( 64%) [HP0 3.18 HP1 3.08 HP2 3.08 HP3 3.18]   write 12.64 GB/s ( 66%)
+
+[5] mixed: HP0/HP1/HP3 read, HP2 writes (256 B bursts, 32 in flight)
+  total 9.78 GB/s: HP0 r 2.45 HP1 r 2.44 HP3 r 2.45 HP2 w 3.20
+
+results: ddrbw_200.json
+=== tgen250 ===
+pl_clk0 250.0 MHz: one HP port's ceiling 4.00 GB/s; DDR4-2400 x64 peak 19.2 GB/s
+
+[1] latency, one burst at a time (HP0)
+  read    16 B: AR->first R avg 36 cyc = 145 ns (min 34, max 131)
+  read    64 B: AR->first R avg 36 cyc = 143 ns (min 34, max 144)
+  read   256 B: AR->first R avg 36 cyc = 145 ns (min 34, max 132)
+  write   64 B: AW->B avg 28 cyc = 111 ns
+
+[2] HP0 reads, GB/s: rows = burst bytes, columns = bursts in flight
+    burst      1      2      4      8     16     32     64
+      16B   0.11   0.21   0.43   0.86   1.15   1.15   1.15
+      32B   0.21   0.42   0.83   1.65   2.26   2.26   2.26
+      64B   0.40   0.80   1.59   3.19   3.85   3.98   3.99
+     128B   0.73   1.45   2.90   3.85   3.98   3.98   3.98
+     256B   1.22   2.43   3.84   3.97   3.97   3.97   3.97
+     512B   1.85   3.65   3.97   3.97   3.97   3.97   3.97
+    1024B   2.51   3.90   3.97   3.97   3.97   3.97   3.97
+    2048B   3.09   3.97   3.97   3.97   3.97   3.97   3.97
+    4096B   3.44   3.97   3.97   3.97   3.97   3.97   3.97
+
+[3] each port alone, reads (256 B bursts, 32 in flight) and writes
+  HP0: read 3.97 GB/s (lat 1081 ns), write 4.00 GB/s
+  HP1: read 3.97 GB/s (lat 1081 ns), write 4.00 GB/s
+  HP2: read 3.97 GB/s (lat 1081 ns), write 4.00 GB/s
+  HP3: read 3.97 GB/s (lat 1081 ns), write 4.00 GB/s
+
+[4] ports together, 256 B bursts, 32 in flight: reads / writes
+  HP0                read  3.97 GB/s ( 21%) [HP0 3.97]   write  4.00 GB/s ( 21%)
+  HP0+HP3            read  7.91 GB/s ( 41%) [HP0 3.96 HP3 3.96]   write  8.00 GB/s ( 42%)
+  HP0+HP1            read  7.91 GB/s ( 41%) [HP0 3.96 HP1 3.96]   write  8.00 GB/s ( 42%)
+  HP1+HP2            read  7.81 GB/s ( 41%) [HP1 3.90 HP2 3.90]   write  8.00 GB/s ( 42%)
+  HP0+HP1+HP3        read 10.36 GB/s ( 54%) [HP0 3.45 HP1 3.45 HP3 3.45]   write  9.22 GB/s ( 48%)
+  HP0+HP2+HP3        read 10.37 GB/s ( 54%) [HP0 3.46 HP2 3.46 HP3 3.46]   write  9.21 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 12.51 GB/s ( 65%) [HP0 3.84 HP1 3.13 HP2 3.13 HP3 3.84]   write  9.84 GB/s ( 51%)
+
+[4] ports together, 1024 B bursts, 16 in flight: reads / writes
+  HP0                read  3.97 GB/s ( 21%) [HP0 3.97]   write  4.00 GB/s ( 21%)
+  HP0+HP3            read  7.93 GB/s ( 41%) [HP0 3.96 HP3 3.96]   write  8.00 GB/s ( 42%)
+  HP0+HP1            read  7.93 GB/s ( 41%) [HP0 3.96 HP1 3.96]   write  8.00 GB/s ( 42%)
+  HP1+HP2            read  7.80 GB/s ( 41%) [HP1 3.90 HP2 3.90]   write  8.00 GB/s ( 42%)
+  HP0+HP1+HP3        read 10.35 GB/s ( 54%) [HP0 3.45 HP1 3.45 HP3 3.45]   write  9.22 GB/s ( 48%)
+  HP0+HP2+HP3        read 10.18 GB/s ( 53%) [HP0 3.39 HP2 3.39 HP3 3.39]   write  9.22 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 12.79 GB/s ( 67%) [HP0 3.87 HP1 3.20 HP2 3.20 HP3 3.87]   write  9.84 GB/s ( 51%)
+
+[4] ports together, 4096 B bursts, 8 in flight: reads / writes
+  HP0                read  3.97 GB/s ( 21%) [HP0 3.97]   write  4.00 GB/s ( 21%)
+  HP0+HP3            read  7.92 GB/s ( 41%) [HP0 3.96 HP3 3.96]   write  8.00 GB/s ( 42%)
+  HP0+HP1            read  7.92 GB/s ( 41%) [HP0 3.96 HP1 3.96]   write  8.00 GB/s ( 42%)
+  HP1+HP2            read  7.80 GB/s ( 41%) [HP1 3.90 HP2 3.90]   write  8.00 GB/s ( 42%)
+  HP0+HP1+HP3        read 10.35 GB/s ( 54%) [HP0 3.45 HP1 3.45 HP3 3.45]   write  9.22 GB/s ( 48%)
+  HP0+HP2+HP3        read 10.37 GB/s ( 54%) [HP0 3.46 HP2 3.46 HP3 3.46]   write  9.23 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 12.59 GB/s ( 66%) [HP0 3.84 HP1 3.15 HP2 3.15 HP3 3.85]   write  9.85 GB/s ( 51%)
+
+[5] mixed: HP0/HP1/HP3 read, HP2 writes (256 B bursts, 32 in flight)
+  total 9.38 GB/s: HP0 r 2.35 HP1 r 2.35 HP3 r 2.35 HP2 w 4.00
+
+results: ddrbw_250.json
+=== tgen300 ===
+pl_clk0 333.3 MHz: one HP port's ceiling 5.33 GB/s; DDR4-2400 x64 peak 19.2 GB/s
+
+[1] latency, one burst at a time (HP0)
+  read    16 B: AR->first R avg 46 cyc = 138 ns (min 43, max 187)
+  read    64 B: AR->first R avg 46 cyc = 137 ns (min 43, max 155)
+  read   256 B: AR->first R avg 47 cyc = 141 ns (min 43, max 164)
+  write   64 B: AW->B avg 34 cyc = 102 ns
+
+[2] HP0 reads, GB/s: rows = burst bytes, columns = bursts in flight
+    burst      1      2      4      8     16     32     64
+      16B   0.11   0.23   0.45   0.91   1.15   1.15   1.15
+      32B   0.22   0.44   0.89   1.77   2.26   2.26   2.26
+      64B   0.43   0.86   1.72   3.44   4.45   4.45   4.45
+     128B   0.79   1.58   3.16   5.08   5.23   5.23   5.23
+     256B   1.35   2.71   5.07   5.22   5.22   5.22   5.22
+     512B   2.18   4.32   5.19   5.22   5.22   5.22   5.23
+    1024B   3.04   5.16   5.22   5.22   5.22   5.22   5.23
+    2048B   3.85   5.22   5.23   5.23   5.23   5.23   5.23
+    4096B   4.41   5.23   5.22   5.22   5.22   5.23   5.23
+
+[3] each port alone, reads (256 B bursts, 32 in flight) and writes
+  HP0: read 5.23 GB/s (lat 819 ns), write 5.33 GB/s
+  HP1: read 5.22 GB/s (lat 819 ns), write 5.33 GB/s
+  HP2: read 5.22 GB/s (lat 819 ns), write 5.33 GB/s
+  HP3: read 5.23 GB/s (lat 819 ns), write 5.33 GB/s
+
+[4] ports together, 256 B bursts, 32 in flight: reads / writes
+  HP0                read  5.23 GB/s ( 27%) [HP0 5.23]   write  5.33 GB/s ( 28%)
+  HP0+HP3            read 10.29 GB/s ( 54%) [HP0 5.15 HP3 5.15]   write 10.65 GB/s ( 55%)
+  HP0+HP1            read 10.26 GB/s ( 53%) [HP0 5.13 HP1 5.13]   write 10.59 GB/s ( 55%)
+  HP1+HP2            read  8.31 GB/s ( 43%) [HP1 4.15 HP2 4.15]   write  8.33 GB/s ( 43%)
+  HP0+HP1+HP3        read 10.37 GB/s ( 54%) [HP0 3.46 HP1 3.46 HP3 3.46]   write  9.18 GB/s ( 48%)
+  HP0+HP2+HP3        read 10.37 GB/s ( 54%) [HP0 3.46 HP2 3.46 HP3 3.46]   write  9.20 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 10.72 GB/s ( 56%) [HP0 3.95 HP1 2.68 HP2 2.68 HP3 3.95]   write  9.99 GB/s ( 52%)
+
+[4] ports together, 1024 B bursts, 16 in flight: reads / writes
+  HP0                read  5.22 GB/s ( 27%) [HP0 5.22]   write  5.33 GB/s ( 28%)
+  HP0+HP3            read 10.38 GB/s ( 54%) [HP0 5.19 HP3 5.19]   write 10.65 GB/s ( 55%)
+  HP0+HP1            read 10.26 GB/s ( 53%) [HP0 5.13 HP1 5.13]   write 10.64 GB/s ( 55%)
+  HP1+HP2            read  8.31 GB/s ( 43%) [HP1 4.15 HP2 4.15]   write  8.34 GB/s ( 43%)
+  HP0+HP1+HP3        read 10.38 GB/s ( 54%) [HP0 3.46 HP1 3.46 HP3 3.46]   write  9.22 GB/s ( 48%)
+  HP0+HP2+HP3        read 10.36 GB/s ( 54%) [HP0 3.45 HP2 3.45 HP3 3.45]   write  9.22 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 10.73 GB/s ( 56%) [HP0 3.96 HP1 2.68 HP2 2.68 HP3 3.96]   write  9.75 GB/s ( 51%)
+
+[4] ports together, 4096 B bursts, 8 in flight: reads / writes
+  HP0                read  5.22 GB/s ( 27%) [HP0 5.22]   write  5.33 GB/s ( 28%)
+  HP0+HP3            read 10.37 GB/s ( 54%) [HP0 5.18 HP3 5.18]   write 10.64 GB/s ( 55%)
+  HP0+HP1            read 10.38 GB/s ( 54%) [HP0 5.19 HP1 5.19]   write 10.64 GB/s ( 55%)
+  HP1+HP2            read  8.31 GB/s ( 43%) [HP1 4.15 HP2 4.15]   write  8.34 GB/s ( 43%)
+  HP0+HP1+HP3        read 10.36 GB/s ( 54%) [HP0 3.45 HP1 3.45 HP3 3.45]   write  9.21 GB/s ( 48%)
+  HP0+HP2+HP3        read 10.37 GB/s ( 54%) [HP0 3.46 HP2 3.46 HP3 3.46]   write  9.22 GB/s ( 48%)
+  HP0+HP1+HP2+HP3    read 10.73 GB/s ( 56%) [HP0 3.96 HP1 2.68 HP2 2.68 HP3 3.96]   write 10.03 GB/s ( 52%)
+
+[5] mixed: HP0/HP1/HP3 read, HP2 writes (256 B bursts, 32 in flight)
+  total 10.48 GB/s: HP0 r 2.62 HP1 r 2.62 HP3 r 2.62 HP2 w 5.33
+
+results: ddrbw_300.json
+TARS-mini bitstream restored

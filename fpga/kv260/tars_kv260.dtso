@@ -1,0 +1,50 @@
+// Device-tree overlay for TARS-mini on the KV260 (Kria Ubuntu: xmutil loadapp tars_kv260, or
+// fpgautil -b tars_kv260.bit.bin -o tars_kv260.dtbo). Loads the bitstream into the PL, sets
+// pl_clk0 to 100 MHz (the core), pl_clk1 to 250 MHz (the DDR ports: the read masters and the write interconnect's port side) and
+// the PS-PL AXI ports to the design's widths (all 128 bits, as in the KV260 base platform's
+// pl.dtbo). The registers (0xA000_0000, 16 KB) are used through /dev/mem.
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target = <&fpga_full>;
+		__overlay__ {
+			firmware-name = "tars_kv260.bit.bin";
+			clocking0: clocking0 {
+				compatible = "xlnx,fclk";
+				assigned-clocks = <&zynqmp_clk 71>;
+				assigned-clock-rates = <99999001>;
+				#clock-cells = <0>;
+				clock-output-names = "fabric_clk";
+				clocks = <&zynqmp_clk 71>;
+			};
+			clocking1: clocking1 {
+				compatible = "xlnx,fclk";
+				assigned-clocks = <&zynqmp_clk 72>;
+				assigned-clock-rates = <249997500>;
+				#clock-cells = <0>;
+				clock-output-names = "fabric_clk1";
+				clocks = <&zynqmp_clk 72>;
+			};
+			afi0: afi0 {
+				compatible = "xlnx,afi-fpga";
+				resets = <&zynqmp_reset 116>, <&zynqmp_reset 117>, <&zynqmp_reset 118>, <&zynqmp_reset 119>;
+				config-afi = <0 0>, <1 0>, <2 0>, <3 0>, <4 0>, <5 0>, <6 0>, <7 0>, <8 0>, <9 0>,
+				             <10 0>, <11 0>, <12 0>, <13 0>, <14 0xa00>, <15 0x000>;
+			};
+		};
+	};
+	fragment@1 {
+		target = <&amba>;
+		__overlay__ {
+			#address-cells = <2>;
+			#size-cells = <2>;
+			tars_mini@a0000000 {
+				compatible = "generic-uio";
+				reg = <0x0 0xa0000000 0x0 0x4000>;
+				clocks = <&clocking0>, <&clocking1>;
+			};
+		};
+	};
+};
