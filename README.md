@@ -17,6 +17,8 @@ core clock (v3.2; 2.6 s/token at v1.0), prefill 0.115 s/token, 86% of the XCK26'
 Quick start on the board: export the model data on a PC (`python tools/export_kv260.py --ckpt <Qwen3.5-0.8B>`),
 copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`.
 
+License: [Apache-2.0](LICENSE).
+
 The original project notes follow.
 
 ---
