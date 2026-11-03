@@ -30,7 +30,7 @@ h1{font-family:var(--serif);font-weight:900;font-size:clamp(30px,5.4vw,46px);lin
 h2{font-family:var(--serif);font-weight:900;font-size:26px;line-height:1.3;margin:0 0 6px;text-wrap:balance}
 h3{font-size:17px;font-weight:700;margin:26px 0 6px}
 .lede{font-size:17px;color:var(--muted);max-width:62ch;margin:0}
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:28px}
+.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:28px}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
 .kpi b{display:block;font-family:var(--mono);font-size:26px;font-weight:500;color:var(--accent);font-variant-numeric:tabular-nums;line-height:1.2}
 .kpi span{font-size:13px;color:var(--muted)}
@@ -87,10 +87,11 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
 
 <header class="hero"><div class="wrap">
   <div class="eyebrow">Project log · 2026-10-31 → 2026-11-03 · XCK26 @ 100 MHz</div>
-  <h1>TARS-mini on KV260：在一块 FPGA 上逐比特跑通 Qwen3.5-0.8B</h1>
-  <p class="lede">从 ASIC 参考设计出发，经过面积压缩、板卡 bring-up 和 7 个上板版本的访存与计算迭代，decode 从 2.6 s/token 降到 0.16 s/token（16 倍）。每一步的 logits 都与 golden 模型逐比特一致。</p>
+  <h1>TARS-mini on KV260：在一块 FPGA 上逐比特跑通 Qwen3.5-0.8B 和 Qwen3-0.6B</h1>
+  <p class="lede">从 ASIC 参考设计出发，经过面积压缩、板卡 bring-up 和 7 个上板版本的访存与计算迭代，decode 从 2.6 s/token 降到 0.16 s/token（16 倍）。同一个比特流不改硬件又跑通了 Qwen3-0.6B，decode 0.08 s/token。每一步的 logits 都与 golden 模型逐比特一致。</p>
   <div class="kpis">
-    <div class="kpi"><b>0.16 s</b><span>decode / token（v1.0 为 2.6 s）</span></div>
+    <div class="kpi"><b>0.16 s</b><span>Qwen3.5-0.8B decode / token（v1.0 为 2.6 s）</span></div>
+    <div class="kpi"><b>0.08 s</b><span>Qwen3-0.6B decode / token，同一比特流</span></div>
     <div class="kpi"><b>0.115 s</b><span>prefill / token，4 个 token 一块</span></div>
     <div class="kpi"><b>4.5 s</b><span>31 个位置的示例对话（v1.0 约 80 s）</span></div>
     <div class="kpi"><b>86.0%</b><span>LUT 占用，100,743 / 117,120</span></div>
@@ -98,7 +99,7 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
 </div></header>
 
 <nav class="toc" aria-label="目录"><div class="wrap">
-  <a href="#asic">1 ASIC 起点</a><a href="#port">2 FPGA 移植</a><a href="#deploy">3 部署方案</a><a href="#iter">4 提速迭代</a><a href="#lessons">5 启示</a><a href="#open">6 未完成</a>
+  <a href="#asic">1 ASIC 起点</a><a href="#port">2 FPGA 移植</a><a href="#deploy">3 部署方案</a><a href="#iter">4 提速迭代</a><a href="#qwen3">5 换模型</a><a href="#lessons">6 启示</a><a href="#open">7 未完成</a>
 </div></nav>
 
 <main class="wrap">
@@ -298,8 +299,44 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
   </ol>
 </section>
 
-<section id="lessons">
+<section id="qwen3">
   <div class="sec-no">05</div>
+  <h2>换一个模型：Qwen3-0.6B</h2>
+  <p>芯片不认识"Qwen"，只执行描述符队列：INT8 矩阵乘、ELT、RoPE、FDOT、RMSNorm/L2Norm/softmax 和几种激活。模型专用的只有软件里的降级器（<code>llm.py</code>），所以换模型不改 RTL、不重出比特流。</p>
+  <h3>选型</h3>
+  <p>v3.2 的硬件限制：矩阵乘 K ≤ 4096（去掉阵列后 GEMV 的输入缓冲）、模型镜像 ≤ 1 GB 地址空间、上下文 256。Qwen3-0.6B 的 hidden 1024、FFN 3072、注意力输出 K = 2048，全部在限制内；Qwen2.5-0.5B 的 FFN 4864 和 Llama-3.2-1B 都超了。</p>
+  <div class="tbl"><table>
+    <tr><th></th><th>Qwen3.5-0.8B</th><th>Qwen3-0.6B</th></tr>
+    <tr><td>层</td><td>24：18 层 Gated DeltaNet + 6 层带门控的全注意力</td><td>28 层全注意力（GQA 16/8，QK-norm）</td></tr>
+    <tr><td>head_dim / RoPE</td><td>256，部分旋转（1/4）</td><td>128，全旋转，θ = 10<sup>6</sup></td></tr>
+    <tr><td>RMSNorm 权重</td><td>零中心：γ = 1 + w</td><td>直接用：γ = w</td></tr>
+    <tr><td>词表</td><td>248,320（输出层 4 × 62,080 行）</td><td>151,936（4 × 37,984 行）</td></tr>
+    <tr><td>板上镜像</td><td class="n">887 MiB</td><td class="n">662 MiB</td></tr>
+  </table></div>
+  <h3>改动</h3>
+  <ul>
+    <li><b>参考模型</b>（<code>qwen_ref.py</code>）：加 Qwen3 配置，按 <code>model_type</code> 选 transformers 的 Qwen3Model，权重前缀 <code>model.</code>。</li>
+    <li><b>降级器</b>（<code>llm.py</code>）：全注意力层去掉输出门控；归一化权重按模型取 1 + w 或 w；旋转宽度取 head_dim；输出层按词表自动切成不超过 65,535 行的等分块（N 字段 16 位）。注意力缩放 128<sup>−1/2</sup> 不是 2 的幂，并进 q_norm 的 γ 时在 fp32 里舍入一次，只影响和 transformers 的近似比较，不影响逐比特契约。</li>
+    <li><b>导出与板上软件</b>：导出脚本按 checkpoint 的 <code>model_type</code> 选模型；板上运行时本来就只读 manifest，只把提示文字改成显示模型名。<code>run.sh chat --data data_qwen3</code> 切换模型。</li>
+  </ul>
+  <h3>验证</h3>
+  <ol>
+    <li>小维度 4 层 Qwen3 在 golden 上贪心解码，每步 logits 与 transformers（同样 W8A8）相差 ≤ 1e-5，token 一致。</li>
+    <li>小维度 2 层 Qwen3 在 RTL 上（核心 testbench 和 KV260 顶层）与 golden 逐字节一致。</li>
+    <li>完整模型导出时用 golden 跑两个提示词：W8A8 输出 " Paris, and the capital of Italy is"，浮点模型是 " Paris. The capital of Italy is Rome"，差别来自 INT8 量化。</li>
+    <li>上板：硬件测试 24/24，两个提示词共 43 步逐比特一致，ALL PASS。</li>
+  </ol>
+  <div class="tbl"><table>
+    <tr><th>板上实测（v3.2，100 MHz）</th><th>Qwen3.5-0.8B</th><th>Qwen3-0.6B</th></tr>
+    <tr><td>decode</td><td class="n">15.7 M 周期 = 0.16 s/token</td><td class="n">7.3–8.2 M 周期 = 0.08 s/token</td></tr>
+    <tr><td>prefill（20 token，4 个一块）</td><td class="n">2.29 s = 0.115 s/token</td><td class="n">0.76 s = 0.038 s/token</td></tr>
+    <tr><td>示例对话（31 个位置）</td><td class="n">4.5 s</td><td class="n">1.9 s</td></tr>
+  </table></div>
+  <p>decode 快一倍：每 token 读的数据少（镜像 662 vs 887 MiB，词表也小），也没有 DeltaNet 状态的逐头读写。prefill 快三倍：Qwen3.5 的 DeltaNet 递推只能逐 token 做，而注意力可以整块处理。整个移植从下载模型到上板通过约半天，没有动 RTL。</p>
+</section>
+
+<section id="lessons">
+  <div class="sec-no">06</div>
   <h2>给未来迭代的启示</h2>
   <h3>方法</h3>
   <ol class="lessons">
@@ -323,12 +360,13 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
     <li><b>上板前确认没有人在用 PL。</b>重载比特流会清空页表，正在跑的进程会访问错误的物理地址。</li>
     <li><b>Linux 侧的顺序依赖要写成脚本检查。</b>先加载比特流再分配 hugepage；访问 PL 前确认 fpga0 处于 operating 状态。仿真覆盖不到这类问题。</li>
     <li><b>改一个参数时，查清所有共用它的地方。</b>v3.2 的读突发上限和写计数器共用一个位宽参数，只改读侧就让写侧溢出。不同用途的宽度应各自定义。</li>
+    <li><b>硬件只认描述符，换模型就是换软件。</b>契约里没有模型概念，Qwen3-0.6B 的移植只改了降级器、参考模型和导出脚本，RTL 和比特流一点没动。先对照硬件限制（K、地址空间、上下文）选模型，再用"小维度对 transformers、小维度上 RTL、全模型上板"三步验证。</li>
     <li><b>板上的"不可能"值要按平台核实。</b>"物理页号 0 不可能出现"在 x86 上大致成立，在 ZynqMP 上不成立；这个隐患从 v1.0 就存在，直到某次重启后才触发。</li>
   </ol>
 </section>
 
 <section id="open">
-  <div class="sec-no">06</div>
+  <div class="sec-no">07</div>
   <h2>未完成或未验证</h2>
   <div class="note">
     <ul>
