@@ -1,5 +1,5 @@
 #!/bin/bash
-# Load the bitstream and start:   sudo ./run.sh [chat|selftest|quick|hw]   (default: chat)
+# Load the bitstream and start:   sudo ./run.sh [chat|selftest|quick|hw|bench]   (default: chat)
 # The bitstream is (re)loaded every time: never touch 0xA0000000 while the PL is not programmed
 # (a read there with nothing to answer hangs the bus). The hugepages are released before the load:
 # the FPGA manager needs ~8 MB of CMA for the bitstream, and hugepages can take the CMA area.
@@ -9,8 +9,8 @@ cd "$(dirname "$0")"
 FW=/lib/firmware/xilinx/tars_kv260
 # another run holds the core (its page table, its hugepages): reloading the PL under it would
 # leave it driving a reset core
-if pgrep -f "sw/(qwen_chat|selftest)\.py" >/dev/null; then
-  echo "ERROR: TARS-mini is in use by another run:"; pgrep -af "sw/(qwen_chat|selftest)\.py"
+if pgrep -f "sw/(qwen_chat|selftest|spec_bench)\.py" >/dev/null; then
+  echo "ERROR: TARS-mini is in use by another run:"; pgrep -af "sw/(qwen_chat|selftest|spec_bench)\.py"
   echo "quit it first (/quit in the chat)"; exit 1
 fi
 loaded() {
@@ -40,5 +40,6 @@ case "${1:-chat}" in
   selftest) python3 sw/selftest.py "${@:2}" ;;
   quick)    python3 sw/selftest.py --quick "${@:2}" ;;
   hw)       python3 sw/selftest.py --hw-only "${@:2}" ;;
-  *) echo "usage: $0 [chat|selftest|quick|hw]"; exit 1 ;;
+  bench)    python3 sw/spec_bench.py "${@:2}" ;;
+  *) echo "usage: $0 [chat|selftest|quick|hw|bench]"; exit 1 ;;
 esac

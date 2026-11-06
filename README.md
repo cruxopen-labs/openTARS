@@ -5,7 +5,8 @@
 An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B and Qwen3-0.6B bit-exact on a Xilinx
 Kria KV260**: every logit on the board matches the golden model bit for bit. Qwen3-0.6B decodes at
 **0.08 s/token** and Qwen3.5-0.8B at **0.16 s/token** (100 MHz core clock, bitstream v3.2; 2.6 s/token
-at v1.0), using 86% of the XCK26's LUTs.
+at v1.0) on short contexts, using 86% of the XCK26's LUTs. Qwen3.5-0.8B also has optional speculative
+decoding with its MTP head (same tokens, bit for bit; see below).
 
 **Demo:** Qwen3.5-0.8B chatting on the KV260 (above; full video: [demo/Qwen3.5-0.8B-Demo.mp4](demo/Qwen3.5-0.8B-Demo.mp4)).
 
@@ -20,10 +21,45 @@ board, 100 MHz core clock, greedy decoding, every step's logits bit-exact agains
 | [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 24: 18 Gated DeltaNet + 6 gated full attention | 887 MiB | 15.7 M cycles = **0.16 s/token** | 2.29 s = 0.115 s/token | 4.5 s |
 | [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) | 28 full attention (GQA 16/8, QK-norm) | 662 MiB | 7.3-8.2 M cycles = **0.08 s/token** | 0.76 s = 0.038 s/token | 1.9 s |
 
-Decode is bound by DDR reads (each token reads every weight once). Qwen3.5's prefill is slower per
-token because its DeltaNet recurrence runs token by token; Qwen3's attention takes a chunk at once.
+The Qwen3-0.6B decode figure is for short contexts (measured within the first ~30 positions).
+Attention (FDOT) grows with the context and is already 46% of a step at position 64 in simulation; a
+cost model fitted to these runs estimates about 0.17 s/token at position 128 and 0.27 s/token at 250
+(estimates, not measured). Qwen3.5-0.8B has only 6 attention layers and stays flat: 163-169 ms/token
+measured over 96-token answers. Qwen3.5's prefill is slower per token because its DeltaNet recurrence
+runs token by token; Qwen3's attention takes a chunk at once.
 Export a model with `tools/export_kv260.py --ckpt <checkpoint>` (the checkpoint's `model_type` picks
 the lowering); on the board, `sudo ./run.sh chat --data <its data directory>`.
+
+## Speculative decoding (MTP)
+
+Qwen3.5-0.8B's checkpoint has a multi-token prediction head (one gated attention layer, 20 M
+parameters), which runs on the NPU as a draft model. Each round verifies [current token, draft] in one
+two-row chunk: a hit gives two tokens, a miss one. DeltaNet states are not snapshotted: the verify's
+last token writes a second state copy, and a hit flips which copy is live, so a miss costs no copying.
+Greedy output is unchanged: logits are bit-identical to plain decoding, checked on the board by
+`run.sh selftest --data data_mtp`, and multi-turn chats match plain mode. No RTL change was needed.
+
+**It is off by default, because on this hardware it does not pay on average.** A round costs about
+1.85 plain steps: attention and the DeltaNet recurrence scale with the rows verified, and the draft
+reads the 254 MB head as well. It breaks even at about 85% draft hits.
+
+| Prompt type (`run.sh bench`, up to 96 tokens) | Draft hits | Plain | MTP | Speedup |
+|---|---|---|---|---|
+| JSON list | 100% | 164.5 ms/token | 150.8 ms/token | 1.09x |
+| Open question | 83% | 162.9 | 161.0 | 1.01x |
+| Code edit | 85% | 169.0 | 169.4 | 1.00x |
+| Rewrite | 75% | 169.1 | 180.4 | 0.94x |
+| Advice | 68% | 163.4 | 177.0 | 0.92x |
+| Translate | 69% | 167.4 | 188.6 | 0.89x |
+| Summarize | 69% | 167.4 | 189.5 | 0.88x |
+| Chinese chat | 58% | 162.8 | 184.9 | 0.88x |
+| Story | 55% | 163.6 | 192.2 | 0.85x |
+| **Mean** | | | | **0.94x** |
+
+To try it: `python tools/export_kv260.py --mtp --out deploy/kv260/data_mtp`, then on the board
+`sudo ./run.sh chat --data data_mtp --spec` (`sudo ./run.sh bench --data data_mtp` for the table above).
+
+## Layout
 
 | Path | What |
 |---|---|

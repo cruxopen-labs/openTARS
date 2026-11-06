@@ -151,8 +151,11 @@ def pad16(n: int) -> int:
 
 class QwenLowering:
     def __init__(self, cfg, weights: dict[str, np.ndarray], max_tokens: int, ddr_bytes: int = 1 << 27,
-                 head: bool = False, queue_cap: int = 0, scratch_bytes: int = 1 << 22):
+                 head: bool = False, queue_cap: int = 0, scratch_bytes: int = 1 << 22, verify_rows: int = 1,
+                 mtp: bool = False):
         self.cfg, self.w, self.T = cfg, weights, max_tokens
+        self.mtp = mtp                           # Qwen3.5's MTP head (weights["mtp.*"]): mtp_chunk drafts a token
+        self.verify_rows = verify_rows           # logits rows a chunk can return (speculative decoding)
         self.p = self.prog = Dev(ddr_bytes=ddr_bytes)
         c = cfg
         self.H, self.eps = c.hidden_size, c.rms_norm_eps
@@ -243,6 +246,12 @@ class QwenLowering:
         self.lw = [self._la_weights(f"layers.{i}.") if t == "linear_attention" else self._fa_weights(f"layers.{i}.")
                    for i, t in enumerate(self.types)]
         self.final_norm = self.gamma1(self.w["norm.weight"])
+        if self.mtp:
+            W = self.w
+            self.mw = dict(self._fa_weights("mtp.layers.0."), fc=self.lin(W["mtp.fc.weight"]),
+                           ge=self.gamma1(W["mtp.pre_fc_norm_embedding.weight"]),
+                           gh=self.gamma1(W["mtp.pre_fc_norm_hidden.weight"]),
+                           norm=self.gamma1(W["mtp.norm.weight"]))
         # RoPE table: row t = cos(t * inv_freq), sin(t * inv_freq) (fp32, as torch computes them)
         th = F32(self.cfg.rope_parameters["rope_theta"])
         inv = (1.0 / (th ** (np.arange(0, self.rot, 2, dtype=F32) / F32(self.rot)))).astype(F32)
@@ -272,20 +281,29 @@ class QwenLowering:
         for t in self.types:
             if t == "linear_attention":
                 # conv inputs, rows t + hist (the first hist rows are the zero history); DeltaNet states
+                # with the MTP two copies: a verify's last token updates the other one (see _la)
                 self.st.append(dict(cin={n: p.mat(T + hist, d) for n, d in (("q", kd), ("k", kd), ("v", vd))},
-                                    S=[p.mat(self.dk, self.dv) for _ in range(self.nv)]))
+                                    S=[[p.mat(self.dk, self.dv) for _ in range(self.nv)]
+                                       for _ in range(2 if self.mtp else 1)]))
             else:                                  # KV cache (zero padded)
                 self.st.append(dict(kc=p.mat(self.Tp, self.nkv * self.hd), vc=p.mat(self.Tp, self.nkv * self.hd)))
-        self.logits = p.mat(1, self.vocab) if self.head else None   # the chunk's last token
+        if self.mtp:                               # the MTP layer's KV cache (row r: token r + 1, hidden r)
+            self.mst = dict(kc=p.mat(self.Tp, self.nkv * self.hd), vc=p.mat(self.Tp, self.nkv * self.hd))
+        self.logits = p.mat(self.verify_rows, self.vocab) if self.head else None   # the chunk's last token (or tokens)
 
     def input(self, x: np.ndarray, t0: int = 0) -> None:
         a = self.p.base + self.x0.off + t0 * self.x0.ld
         self.p.ddr[a:a + x.size * 4] = np.asarray(x, F32).tobytes()
 
     # ------------------------------------------------------------------ blocks
-    def chunk(self, t0: int, n: int) -> None:
+    def chunk(self, t0: int, n: int, all_rows: bool = False, parity: int = 0, spec: bool = False) -> None:
         """Tokens t0 .. t0 + n - 1 through every layer, the final norm and (with the head) the last
-        token's logits."""
+        token's logits; all_rows: every token's, for a speculative verify (logits_rows reads them).
+        Each head block writes its n rows densely (LDY16 cannot span a vocabulary-wide row).
+        parity: the DeltaNet state copy in use; spec: the last token writes the other copy, so a
+        rejected draft leaves this one as it was after token n - 2 (accepted: the parity flips)."""
+        assert not all_rows or n <= self.verify_rows
+        self.parity, self.spec = parity, spec
         p = self.p
         for i, t in enumerate(self.types):
             p.top = self.scratch0                  # this layer's temporaries over the last layer's
@@ -294,13 +312,46 @@ class QwenLowering:
         p.top = self.scratch0
         p.norm(self.xs[-1].rowv(t0, n), self.final_norm, self.eps, self.y.rowv(t0, n))
         if self.head:
-            yq, ys = p.quant(self.y.rowv(t0 + n - 1, 1))
-            c0 = 0
-            for lin in self.head_lins:
-                p.gemm_rc(yq, ys, lin, V(self.logits.off + 4 * c0, 1, lin.n, 4 * lin.n))   # one row: no stride
-                c0 += lin.n
+            r = n if all_rows else 1
+            self._head(self.y.rowv(t0 + n - r, r))
         assert p.top <= self.scratch_end, "scratch_bytes too small for this chunk"
         p.top = self.end                           # anything allocated later (the queue) after the weights
+
+    def swap_state(self) -> None:
+        """Copy the second DeltaNet state copy to the first, so plain queues (parity 0) can follow."""
+        p = self.p
+        for st, w in zip(self.st, self.lw):
+            if "S" in st:
+                one = replace(w["kscale"], rows=1, cols=1, ld=4)     # 1.0: the product is exact
+                for a, b in zip(st["S"][1], st["S"][0]):
+                    p.elt(C.ELT_MUL, a, one, b, bmode=C.BM_SCALAR)
+
+    def _head(self, y: V) -> None:
+        p, r, c0 = self.p, y.rows, 0
+        yq, ys = p.quant(y)
+        for lin in self.head_lins:
+            p.gemm_rc(yq, ys, lin, V(self.logits.off + 4 * c0 * r, r, lin.n, 4 * lin.n))
+            c0 += lin.n
+
+    def mtp_chunk(self, r0: int, n: int, head: bool = True) -> None:
+        """MTP rows r0 .. r0 + n - 1 (row r: the embedding of token r + 1 and the hidden state of
+        position r, predicting token r + 2): fc over the two norms, one gated full-attention layer
+        with its own KV cache, the norm and (head) the last row's logits, on the tied head."""
+        p, w, H = self.p, self.mw, self.H
+        p.top = self.scratch0
+        cat = p.mat(n, 2 * H)
+        p.norm(self.x0.rowv(r0 + 1, n), w["ge"], self.eps, cat.colv(0, H))
+        p.norm(self.y.rowv(r0, n), w["gh"], self.eps, cat.colv(H, H))
+        cq, cs = p.quant(cat)
+        x, out = p.mat(n, H), p.mat(n, H)
+        p.gemm_rc(cq, cs, w["fc"], x)
+        self._fa_block(w, self.mst, x, out, r0, n)
+        if head:
+            y = p.mat(1, H)
+            p.norm(out.rowv(n - 1, 1), w["norm"], self.eps, y)
+            self._head(y)
+        assert p.top <= self.scratch_end, "scratch_bytes too small for this chunk"
+        p.top = self.end
 
     def _mlp(self, w: dict, x: V, out: V) -> None:
         """out = x + down(silu(gate(h)) * up(h)), h = RMSNorm(x)."""
@@ -358,8 +409,10 @@ class QwenLowering:
         for t in range(n):
             for hh in range(self.nv):
                 r = t * self.nv + hh
-                S = st["S"][hh]
-                p.elt(C.ELT_MUL, S, decay.rowv(t, 1).colv(hh, 1), S, bmode=C.BM_SCALAR)
+                # the decay pass reads the state in use; a verify's last token writes the other copy
+                S0 = st["S"][self.parity][hh]
+                S = st["S"][1 - self.parity][hh] if self.spec and t == n - 1 else S0
+                p.elt(C.ELT_MUL, S0, decay.rowv(t, 1).colv(hh, 1), S, bmode=C.BM_SCALAR)
                 p.fdot(kh.rowv(r, 1), S, kvm, nn=True)                       # kv_mem = S^T k
                 p.elt(C.ELT_SUB, vh.rowv(r, 1), kvm, dl)                     # v - kv_mem
                 p.elt(C.ELT_MUL, dl, beta.rowv(t, 1).colv(hh, 1), dl, bmode=C.BM_SCALAR)
@@ -377,10 +430,12 @@ class QwenLowering:
         self._mlp(w, x1, self.xs[li + 1].rowv(t0, n))
 
     def _fa(self, li: int, t0: int, n: int) -> None:
-        p, w, st = self.p, self.lw[li], self.st[li]
+        self._fa_block(self.lw[li], self.st[li], self.xs[li].rowv(t0, n), self.xs[li + 1].rowv(t0, n), t0, n)
+
+    def _fa_block(self, w: dict, st: dict, x: V, out: V, t0: int, n: int) -> None:
+        p = self.p
         kc, vc = st["kc"], st["vc"]
         nh, nkv, hd = self.nh, self.nkv, self.hd
-        x = self.xs[li].rowv(t0, n)
         h = p.mat(n, self.H)
         p.norm(x, w["ln_in"], self.eps, h)
         hq, hs = p.quant(h)
@@ -421,7 +476,7 @@ class QwenLowering:
         p.gemm_rc(aq, as_, w["o"], o)
         x1 = p.mat(n, self.H)
         p.elt(C.ELT_ADD, x, o, x1)
-        self._mlp(w, x1, self.xs[li + 1].rowv(t0, n))
+        self._mlp(w, x1, out)
 
     # ------------------------------------------------------------------ running chunk by chunk
     def stage(self, ddr: bytearray, a: int, b: int) -> tuple[int, int]:
@@ -439,6 +494,16 @@ class QwenLowering:
     def logits_of(self, ddr) -> np.ndarray:
         a = self.p.base + self.logits.off
         return np.frombuffer(bytes(ddr[a:a + 4 * self.vocab]), "<f4").copy()
+
+    def logits_rows(self, ddr, n: int) -> np.ndarray:
+        """The n rows [n, vocab] of an all_rows chunk (block by block in DDR)."""
+        a = self.p.base + self.logits.off
+        flat = np.frombuffer(bytes(ddr[a:a + 4 * self.vocab * n]), "<f4")
+        out, c0 = np.empty((n, self.vocab), F32), 0
+        for lin in self.head_lins:
+            out[:, c0:c0 + lin.n] = flat[c0 * n:(c0 + lin.n) * n].reshape(n, lin.n)
+            c0 += lin.n
+        return out
 
     def generate(self, run, prompt, n_new: int) -> tuple[list[int], list[np.ndarray], list[int]]:
         """Greedy decoding with the host in the loop: the host looks up the input embedding,
@@ -461,6 +526,56 @@ class QwenLowering:
             ids.append(int(np.argmax(lg)))
             t0, n = t0 + n, 1
         return ids, logits, counts
+
+    def generate_mtp(self, run, prompt, n_new: int, oracle=None) -> tuple[list[int], dict[int, np.ndarray], int]:
+        """Greedy speculative decoding with the MTP head: the same tokens as generate(). Each round
+        verifies [current, draft] (two rows); a hit emits two tokens and flips the state copy, a miss
+        emits the correction and keeps it. The MTP then takes the rows the verify made known and
+        drafts the next token. oracle(t, draft) may replace a draft (tests). Returns (token ids,
+        {position: its logits}, rounds)."""
+        assert self.head and self.mtp and self.verify_rows >= 2
+        state = dict(ddr=self.p.ddr)
+
+        def go(emit) -> None:
+            a = len(self.p.descs)
+            emit()
+            q, c = self.stage(state["ddr"], a, len(self.p.descs))
+            out = run(state["ddr"], q, c)
+            state["ddr"] = out if isinstance(out, bytearray) else bytearray(out)
+
+        def put(t: int, toks) -> None:
+            self.put_input(state["ddr"], t, self.embed(toks))
+        ids, P, par, rounds = list(prompt), len(prompt), 0, 0
+        put(0, ids)
+        go(lambda: self.chunk(0, P))
+        lg = {P - 1: self.logits_of(state["ddr"])}
+        ids.append(int(np.argmax(lg[P - 1])))
+        put(P, ids[P:])
+        go(lambda: self.mtp_chunk(0, P))                    # rows 0 .. P - 1, the last one drafts
+        t = P                                               # ids[t]: known, not yet in the cache
+        while len(ids) < P + n_new + 1:
+            d = int(np.argmax(self.logits_of(state["ddr"])))
+            if oracle is not None:
+                d = oracle(t, d)
+            put(t + 1, [d])
+            go(lambda: self.chunk(t, 2, all_rows=True, parity=par, spec=True))
+            rows = self.logits_rows(state["ddr"], 2)
+            rounds += 1
+            lg[t] = rows[0]
+            x = int(np.argmax(rows[0]))
+            ids.append(x)
+            if x == d:
+                lg[t + 1] = rows[1]
+                ids.append(int(np.argmax(rows[1])))
+                par = 1 - par
+                put(t + 2, ids[t + 2:t + 3])
+                go(lambda: self.mtp_chunk(t, 2))
+                t += 2
+            else:
+                put(t + 1, [x])
+                go(lambda: self.mtp_chunk(t, 1))
+                t += 1
+        return ids, lg, rounds
 
     # ------------------------------------------------------------------ results
     def _read(self, m, v: V) -> np.ndarray:

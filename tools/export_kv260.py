@@ -3,6 +3,7 @@ board runtime (deploy/kv260/sw/tars_board.py).
 
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3.5-0.8B [--T 256] [--out deploy/kv260/data]
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3-0.6B --out deploy/kv260/data_qwen3
+    python3 tools/export_kv260.py --mtp --out deploy/kv260/data_mtp  # Qwen3.5 with its MTP head: speculative decoding
     python3 tools/export_kv260.py --out deploy/kv260/data --check-only      # redo the golden check
     python3 tools/export_kv260.py --chunks-only    # add the prefill chunk queues to an export
 
@@ -14,6 +15,8 @@ Writes into --out:
   queues_c<n>.bin  prefill: one queue per chunk of n tokens at t0 (a multiple of ALIGN): the weights
                    are read once for n tokens; bit-identical to n one-token steps (the same
                    operations on each row, the states the same)
+  queues_s_*.bin   with --mtp: v2p0 / v2p1 verify two tokens at t on either DeltaNet state copy, m1 / m2
+                   MTP rows with the draft head, mp1 / mp4 MTP rows of a prompt (no head), swap the state copy
   manifest.json    addresses and sizes the runtime needs, the queue index, tokenizer settings
   tokenizer.json   (and the chat template's prefix / suffix in the manifest)
   expected.json    the golden model run through the same runtime (tars_board.Qwen on the Golden
@@ -61,12 +64,15 @@ def export(args) -> None:
     t = time.time()
     cfg = model_config(args.ckpt)
     w = Q.load_weights(args.ckpt, cfg, embed=True)
+    if args.mtp:
+        w.update(Q.load_mtp(args.ckpt))
     emb = np.ascontiguousarray(w["embed_tokens.weight"], np.float32)
     bits = emb.view(np.uint32)
     assert not (bits & 0xFFFF).any(), "the embedding is not bf16-exact"
     (bits >> 16).astype(np.uint16).tofile(out / "embed_bf16.bin")
     print(f"embedding {emb.shape} ({time.time() - t:.0f} s)", flush=True)
-    low = L.QwenLowering(cfg, w, max_tokens=args.T, ddr_bytes=DDR, head=True, queue_cap=16384)
+    low = L.QwenLowering(cfg, w, max_tokens=args.T, ddr_bytes=DDR, head=True, queue_cap=16384,
+                         verify_rows=2 if args.mtp else 1, mtp=args.mtp)
     del w
     assert low.p.base == 0
     img = bytes(low.p.ddr[:low.end])
@@ -103,10 +109,42 @@ def export(args) -> None:
              image_bytes=len(img) + pad, state_end=low.scratch_end, qbase=low.qbase,
              queue_cap=low.queue_cap, x0_off=low.x0.off, x0_ld=low.x0.ld, logits_off=low.logits.off,
              mem_bytes=DDR, chat_prefix=pre, chat_suffix=post, eos_ids=[int(e) for e in eos],
-             queue_index=index)
+             queue_index=index, head_blocks=[lin.n for lin in low.head_lins])
     (out / "manifest.json").write_text(json.dumps(m))
     print(f"manifest: {({k: v for k, v in m.items() if k != 'queue_index'})}", flush=True)
     export_chunks(low, out, args.T)
+    if args.mtp:
+        export_spec(low, out, args.T)
+
+
+def export_spec(low, out: Path, T: int) -> None:
+    """The speculative queues, one per position (see the docstring); their index into the manifest
+    (spec: {name: [[t, offset, count], ...]})."""
+    t = time.time()
+    m = json.loads((out / "manifest.json").read_text())
+    kinds = dict(
+        v2p0=(range(T - 1), lambda r: low.chunk(r, 2, all_rows=True, parity=0, spec=True)),
+        v2p1=(range(T - 1), lambda r: low.chunk(r, 2, all_rows=True, parity=1, spec=True)),
+        m1=(range(T - 1), lambda r: low.mtp_chunk(r, 1)),
+        m2=(range(T - 2), lambda r: low.mtp_chunk(r, 2)),
+        mp1=(range(T - 1), lambda r: low.mtp_chunk(r, 1, head=False)),
+        mp4=(range(0, T - 4, 4), lambda r: low.mtp_chunk(r, 4, head=False)),
+        swap=(range(1), lambda r: low.swap_state()))
+    m["spec"] = {}
+    for name, (rows, emit) in kinds.items():
+        index, off = [], 0
+        with open(out / f"queues_s_{name}.bin", "wb") as f:
+            for r in rows:
+                a = len(low.p.descs)
+                emit(r)
+                b = len(low.p.descs)
+                f.write(b"".join(low.p.descs[a:b]))
+                index.append([r, off, b - a])
+                off += 64 * (b - a)
+                del low.p.descs[a:b]
+        m["spec"][name] = index
+        print(f"spec {name}: {len(index)} queues, {off / 2**20:.1f} MiB ({time.time() - t:.0f} s)", flush=True)
+    (out / "manifest.json").write_text(json.dumps(m))
 
 
 def export_chunks(low, out: Path, T: int) -> None:
@@ -212,6 +250,7 @@ def main() -> int:
     ap.add_argument("--out", default=str(ROOT / "deploy" / "kv260" / "data"))
     ap.add_argument("--check-only", action="store_true")
     ap.add_argument("--chunks-only", action="store_true")
+    ap.add_argument("--mtp", action="store_true", help="Qwen3.5: the MTP head and the speculative queues")
     args = ap.parse_args()
     out = Path(args.out)
     if args.chunks_only:

@@ -18,6 +18,9 @@
 - v3.0（实板验证过）：两个读口，每拍 64 字节；`run.sh selftest` ALL PASS，每一步 logits 与 golden model 逐比特一致；
   decode 约 21 M 周期/token ≈ 0.21 s/token；提示词按 4 个 token 分块 prefill ≈ 0.12 s/token
   （v1.0：2.6 s/token；v1.1：0.90；v1.3：0.73；v1.4：0.60；v2.0：0.36）。
+- **MTP 投机解码（可选，默认关闭）：** 用 `tools/export_kv260.py --mtp --out deploy/kv260/data_mtp` 导出后，
+  `sudo ./run.sh chat --data data_mtp --spec`；输出与普通解码逐比特相同。实测平均 0.94×（命中率约 85% 才不亏，
+  最好的 JSON 任务 1.09×），`sudo ./run.sh bench --data data_mtp` 可复现对比。
 - RTL 回归（FPGA 版，经 KV260 顶层：AXI-Lite + 四读口突发桥 + 页表打乱 + 随机背压/延迟）386 通过 / 22 跳过（conv 与阵列专用用例）、核心 testbench 425/425 逐字节一致。
 - **完整 Qwen3.5-0.8B（真实权重）经本目录的板上软件（`tars_board.Qwen`，后端换成 RTL 仿真）与
   KV260 顶层 RTL 运行，logits 与 golden model 逐比特一致**；单 token 84.8 M 周期 ≈ **0.85 s/token**

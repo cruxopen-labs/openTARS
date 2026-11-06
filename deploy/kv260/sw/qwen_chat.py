@@ -28,6 +28,8 @@ def main() -> int:
     ap.add_argument("--max-new", type=int, default=128)
     ap.add_argument("--raw", action="store_true", help="no chat template")
     ap.add_argument("--per-token", action="store_true", help="the prompt a token at a time (no prefill chunks)")
+    ap.add_argument("--spec", action="store_true", help="MTP speculative decoding (an export with --mtp): the same "
+                    "tokens; pays off only above ~85 % draft hits, so it is off by default")
     args = ap.parse_args()
     from tokenizers import Tokenizer
     d = Path(args.data)
@@ -72,7 +74,31 @@ def main() -> int:
         tp = time.time() - t0
         print("tars> ", end="", flush=True)
         out, shown, t1 = [], "", time.time()
-        while len(out) < args.max_new and m.pos < m.T:
+        spec = bool(m.spec) and args.spec
+        rounds = hits = 0
+        if spec:                                 # the same tokens as below, up to two per round
+            new, done, cut = [m.begin_spec(lg)], False, False
+            while True:
+                for nxt in new:
+                    done = nxt in eos
+                    cut = not done and len(out) >= args.max_new   # a hit's second token over the limit: dropped
+                    if done or cut:
+                        break
+                    out.append(nxt)
+                s = tk.decode(out)
+                if not s.endswith("�"):
+                    print(s[len(shown):], end="", flush=True)
+                    shown = s
+                if done or cut or len(out) >= args.max_new or not m.can_spec():
+                    break
+                new, _ = m.spec_round(new[-1])
+                rounds, hits = rounds + 1, hits + len(new) - 1
+            m.end_spec()
+            print(f"\n  [draft hits {hits}/{rounds}]")
+            if not (done or cut) and m.pos < m.T:  # the last token into the cache; plain steps from here
+                lg = m.step(new[-1])
+                spec = False
+        while not spec and len(out) < args.max_new and m.pos < m.T:
             nxt = int(np.argmax(lg))
             if nxt in eos:
                 break

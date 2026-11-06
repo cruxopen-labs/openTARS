@@ -52,6 +52,48 @@ def check(c, s, lg, cycles, what) -> bool:
     return good
 
 
+def speculative(dev, d: Path, quick: bool) -> bool:
+    """MTP speculative decoding (an export with --mtp): every verified row's logits and every token
+    against the golden model's plain decoding, bit for bit."""
+    exp = json.loads((d / "expected.json").read_text())
+    m = B.Qwen(dev, d, log=lambda *a, **k: None)
+    ok = True
+    for c in exp:
+        m.new_conversation()
+        ids, steps = c["prompt_ids"], c["steps"]
+        last = min(len(steps), len(ids) + 3) if quick else len(ids) + (len(steps) - len(ids)) // 2
+        new, tok = [m.begin_spec(m.prefill(ids))], []
+        rounds = hits = cyc = 0
+        while (m.pos < last or not m.par) and m.pos + 2 < len(steps):   # stop on the second state copy
+            tok += new
+            t = m.pos
+            new, rows = m.spec_round(new[-1])
+            cyc += m.cycles
+            rounds, hits = rounds + 1, hits + len(new) - 1
+            for i in range(len(new)):
+                if t + i < len(steps):
+                    good = hashlib.sha256(rows[i].tobytes()).hexdigest() == steps[t + i]["sha256"]
+                    ok &= good
+                    if not good:
+                        print(f"  {c['name']} pos {t + i}: MISMATCH")
+        tok += new
+        want = c["generated"][:len(tok)]
+        same = tok[:len(want)] == want
+        ok &= same
+        swapped = m.par
+        m.end_spec()                                 # then plain steps from the swapped state
+        while m.pos < len(steps):
+            s = steps[m.pos]
+            good = hashlib.sha256(m.step(s["token"]).tobytes()).hexdigest() == s["sha256"]
+            ok &= good
+            if not good:
+                print(f"  {c['name']} pos {s['pos']} after the swap: MISMATCH")
+        print(f"  {c['name']}: state copy {swapped} at the end, plain steps after it ok")
+        print(f"  {c['name']}: {'tokens match' if same else 'TOKENS DIFFER'}, {rounds} rounds, draft hits {hits}, "
+              f"{cyc / max(1, rounds + hits) / 1e8:.3f} s/token at 100 MHz")
+    return ok
+
+
 def model(dev, d: Path, quick: bool, chunked: bool) -> bool:
     """Each prompt as the chat runs it (chunked: the prompt in prefill chunks, then a token at a
     time), or every position a token at a time; the logits against the golden model's."""
@@ -97,6 +139,12 @@ def main() -> int:
     print(f"2. {json.loads((d / 'manifest.json').read_text()).get('model', 'model')} (logits vs the golden model, bit for bit)")
     ok2 = model(dev, d, args.quick, not args.per_token)
     print("   PASS" if ok2 else "   FAIL")
+    ok3 = True
+    if "spec" in json.loads((d / "manifest.json").read_text()):
+        print("3. MTP speculative decoding (logits and tokens vs plain decoding, bit for bit)")
+        ok3 = speculative(dev, d, args.quick)
+        print("   PASS" if ok3 else "   FAIL")
+    ok2 = ok2 and ok3
     print("ALL PASS" if ok1 and ok2 else "FAILED")
     return 0 if ok1 and ok2 else 1
 

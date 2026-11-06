@@ -297,3 +297,123 @@ def test_qwen3_model_with_head_greedy_matches_transformers():
     for i, (g, r) in enumerate(zip(logits, ref.logits)):
         assert np.abs(g - r).max() <= 1e-5 * np.abs(r).max(), i
         assert int(np.argmax(r)) == ids[len(prompt) + i]
+
+
+@pytest.mark.parametrize("cfgname", ["CFG_Q3_SMALL"])
+def test_speculative_verify_bit_identical_to_plain_decode(cfgname):
+    """Greedy speculative decoding on Qwen3: chunks of up to 4 tokens at any position, every row's
+    logits, rejected drafts left in the KV cache and overwritten later. Every accepted position's
+    logits must equal plain one-token decoding bit for bit, so the tokens are the same."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(getattr(Q, cfgname), ["full_attention"] * 3, vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    mk = lambda: L.QwenLowering(cfg, w, max_tokens=48, ddr_bytes=1 << 25, head=True, queue_cap=4096, verify_rows=4)
+
+    def run(ddr, q, n):
+        m = Machine(ddr)
+        assert m.run_queue(q, n).done
+        return m.ddr
+    prompt, new = [5, 77, 901, 12, 3000], 24
+    a = mk()
+    ids, plain, _ = a.generate(run, prompt, new)     # plain[i]: the logits after position len(prompt) - 1 + i
+    b = mk()
+    ddr = b.p.ddr
+    rng = np.random.default_rng(1)
+
+    def go(t0, toks, all_rows):
+        nonlocal ddr
+        b.put_input(ddr, t0, b.embed(toks))
+        s = len(b.p.descs)
+        b.chunk(t0, len(toks), all_rows=all_rows)
+        q, c = b.stage(ddr, s, len(b.p.descs))
+        ddr = run(ddr, q, c)
+    go(0, prompt, False)
+    out = list(prompt)
+    lg = b.logits_of(ddr)
+    assert lg.tobytes() == plain[0].tobytes()
+    out.append(int(np.argmax(lg)))
+    rejected = 0
+    while len(out) < len(ids):
+        t = len(out) - 1                             # the last token is not in the cache yet
+        k = min(int(rng.integers(0, 4)), len(prompt) + new - 1 - t)   # drafts after it
+        right = ids[t + 1:t + 1 + k]
+        cut = int(rng.integers(0, len(right) + 1))   # the first `cut` drafts right, the next wrong
+        draft = list(right[:cut]) + [(int(v) + 1) % 4096 for v in right[cut:]]
+        toks = [out[-1]] + draft
+        go(t, toks, True)
+        rows = b.logits_rows(ddr, len(toks))
+        for i in range(len(toks)):
+            assert rows[i].tobytes() == plain[t + i + 1 - len(prompt)].tobytes(), (t, i)
+            nxt = int(np.argmax(rows[i]))
+            out.append(nxt)
+            if i == len(draft) or draft[i] != nxt:
+                rejected += i < len(draft)
+                break
+    assert out[:len(ids)] == ids and rejected >= 2
+
+
+def test_mtp_speculative_bit_identical_to_plain_decode():
+    """Qwen3.5 (LA and FA layers) with the MTP head: greedy speculative decoding gives the tokens of
+    plain decoding and, at every position it verified, the same logits bit for bit, through hits
+    and misses alike (the oracle forces both: a miss must leave the DeltaNet state as it was)."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_SMALL, Q.LAYERS_08B[:4], vocab=4096)
+    w = {**Q.random_weights(cfg, embed=True), **Q.random_mtp(cfg)}
+    mk = lambda **k: L.QwenLowering(cfg, w, max_tokens=48, ddr_bytes=1 << 25, head=True, queue_cap=8192, **k)
+
+    def run(ddr, q, n):
+        m = Machine(ddr)
+        assert m.run_queue(q, n).done
+        return m.ddr
+    prompt, new = [5, 77, 901, 12, 3000], 20
+    ids, plain, _ = mk().generate(run, prompt, new)
+    rng = np.random.default_rng(2)
+    hits = []
+
+    def oracle(t, d):                                # ids[t + 1] is the right draft for row t + 1
+        right = rng.random() < 0.5 and t + 1 < len(ids)
+        hits.append(right)
+        return ids[t + 1] if right else (ids[min(t + 1, len(ids) - 1)] + 1) % 4096
+    got, lg, rounds = mk(verify_rows=2, mtp=True).generate_mtp(run, prompt, new, oracle)
+    assert got[:len(ids)] == ids
+    for pos, row in lg.items():
+        if pos - len(prompt) + 1 < len(plain):
+            assert row.tobytes() == plain[pos - len(prompt) + 1].tobytes(), pos
+    assert 3 <= sum(hits) <= len(hits) - 3 and rounds < new
+
+
+def test_swap_state_copies_exactly():
+    """swap_state: the second DeltaNet state copy into the first, bit for bit (signed zeros, tiny and
+    huge values), so plain queues can continue after a speculative run."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_SMALL, ["linear_attention", "full_attention"], vocab=64)
+    w = {**Q.random_weights(cfg, embed=True), **Q.random_mtp(cfg)}
+    low = L.QwenLowering(cfg, w, max_tokens=8, ddr_bytes=1 << 24, head=True, queue_cap=2048, verify_rows=2, mtp=True)
+    ddr = low.p.ddr
+    rng = np.random.default_rng(3)
+    S = low.st[0]["S"]
+    vals = []
+    for v in S[1]:
+        a = (rng.normal(0, 1, (v.rows, v.cols)) * 10.0 ** rng.integers(-30, 30, (v.rows, v.cols))).astype(F32)
+        a[0, :4] = [0.0, -0.0, 1e-37, -3e38]
+        vals.append(a.tobytes())
+        o = low.p.base + v.off
+        ddr[o:o + len(vals[-1])] = vals[-1]
+    a0 = len(low.p.descs)
+    low.swap_state()
+    q, n = low.stage(ddr, a0, len(low.p.descs))
+    m = Machine(ddr)
+    assert m.run_queue(q, n).done
+    for v, b in zip(S[0], vals):
+        o = low.p.base + v.off
+        assert bytes(m.ddr[o:o + len(b)]) == b
+

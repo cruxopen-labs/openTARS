@@ -219,6 +219,11 @@ class Qwen:
             if int(n) <= rows and (self.d / f"queues_c{n}.bin").exists():
                 self.chunks[int(n)] = (np.memmap(self.d / f"queues_c{n}.bin", np.uint8, "r"),
                                        {int(t0): (int(o), int(k)) for t0, o, k in index})
+        # speculative decoding (an export with --mtp): name -> (queues, {t: (offset, descriptors)})
+        self.spec = {n: (np.memmap(self.d / f"queues_s_{n}.bin", np.uint8, "r"),
+                         {int(r): (int(o), int(k)) for r, o, k in index})
+                     for n, index in m.get("spec", {}).items()}
+        self.par, self.mrow, self.draft = 0, 0, None
         log(f"  ready in {time.time() - t:.0f} s ({size >> 20} MiB image, {self.T} positions, "
             f"prefill chunks {sorted(self.chunks) or 'none'})")
         self.pos = 0
@@ -226,7 +231,7 @@ class Qwen:
     def new_conversation(self) -> None:
         self.dev.mem[:len(self.state0)] = self.state0
         self.dev.to_dev(0, len(self.state0))
-        self.pos = 0
+        self.pos, self.par, self.mrow, self.draft = 0, 0, 0, None
 
     def _put(self, t: int, tokens) -> None:
         """The embeddings of `tokens` into the input rows t, t + 1, ..."""
@@ -258,6 +263,70 @@ class Qwen:
         lo = self.m["logits_off"]
         self.dev.from_dev(lo, 4 * self.vocab)
         return self.dev.mem[lo:lo + 4 * self.vocab].view(np.float32).copy()
+
+    def _rows(self, n: int) -> np.ndarray:
+        """The logits rows [n, vocab] of a verify (each head block holds its n rows, densely)."""
+        lo = self.m["logits_off"]
+        self.dev.from_dev(lo, 4 * self.vocab * n)
+        flat = self.dev.mem[lo:lo + 4 * self.vocab * n].view(np.float32)
+        out, c0 = np.empty((n, self.vocab), np.float32), 0
+        for b in self.m["head_blocks"]:
+            out[:, c0:c0 + b] = flat[c0 * n:(c0 + b) * n].reshape(n, b)
+            c0 += b
+        return out
+
+    def _spec_run(self, name: str, t: int) -> int:
+        queues, index = self.spec[name]
+        off, k = index[t]
+        return self._run(queues, off, k, f"{name} at {t}")
+
+    def begin_spec(self, lg: np.ndarray) -> int:
+        """After a prefill (logits lg): the first new token (not yet in the cache). The MTP takes the
+        rows it has not seen and drafts the token after it."""
+        cur = int(np.argmax(lg))
+        t, cyc = self.pos, 0
+        self._put(t, [cur])
+        while self.mrow < t - 1:
+            n = 4 if self.mrow + 4 <= t - 1 and self.mrow in self.spec["mp4"][1] else 1
+            cyc += self._spec_run(f"mp{n}", self.mrow)
+            self.mrow += n
+        cyc += self._spec_run("m1", t - 1)
+        self.mrow = t
+        self.draft = int(np.argmax(self._logits()))
+        self.cycles = cyc
+        return cur
+
+    def can_spec(self) -> bool:
+        return self.pos + 3 <= self.T
+
+    def spec_round(self, cur: int) -> tuple[list[int], np.ndarray]:
+        """Verify [cur, draft] at the next position: returns the new tokens (a hit: 2, a miss: 1; the last
+        is not yet in the cache) and the verify's logits rows. The same tokens as plain greedy decoding."""
+        t, d = self.pos, self.draft
+        self._put(t + 1, [d])
+        cyc = self._spec_run(f"v2p{self.par}", t)
+        rows = self._rows(2)
+        x = int(np.argmax(rows[0]))
+        if x == d and x not in self.m["eos_ids"]:          # an end token stays out of the cache, as in plain decoding
+            y = int(np.argmax(rows[1]))
+            self.par ^= 1                                  # the draft's update is the state now
+            self._put(t + 2, [y])
+            cyc += self._spec_run("m2", t)
+            self.pos, new = t + 2, [x, y]
+        else:
+            self._put(t + 1, [x])
+            cyc += self._spec_run("m1", t)
+            self.pos, new = t + 1, [x]
+        self.mrow = self.pos
+        self.draft = int(np.argmax(self._logits()))
+        self.cycles = cyc
+        return new, rows
+
+    def end_spec(self) -> None:
+        """Back to the plain queues (they use the first state copy)."""
+        if self.par:
+            self._spec_run("swap", 0)
+            self.par = 0
 
     def step(self, token: int) -> np.ndarray:
         """Token `token` at the next position; returns the logits (fp32, vocab)."""

@@ -489,3 +489,52 @@ def test_qwen3_model_greedy_on_rtl():
     ids, _, _ = low.generate(run, [7, 1000, 42], 2)
     assert len(ids) == 6
 
+
+def test_speculative_verify_on_rtl():
+    """A speculative verify on the RTL: a chunk of 4 at an unaligned position with every row's logits
+    (the head as 4-row GEMV passes), then a rejected draft's stale K / V rows overwritten by a chunk
+    at the position after the accepted token. RTL == golden byte for byte at every step."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_Q3_SMALL, ["full_attention"] * 2, vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 23, head=True, queue_cap=2048,
+                         scratch_bytes=1 << 20, verify_rows=4)
+    ddr = low.p.ddr
+    for t0, toks, rows in (([0, [7, 1000, 42], False]), (3, [9, 11, 13, 15], True), (5, [21, 23, 25], True),
+                           (7, [31], True), (8, [33, 35], True)):
+        low.put_input(ddr, t0, low.embed(toks))
+        s = len(low.p.descs)
+        low.chunk(t0, len(toks), all_rows=rows)
+        q, n = low.stage(ddr, s, len(low.p.descs))
+        st, r = both(bytes(ddr), q, n, stall=10, lat=3)
+        assert st.done
+        ddr = bytearray(r.ddr)
+
+
+def test_mtp_speculative_on_rtl():
+    """Qwen3.5 (LA then FA, small dims) with the MTP head: speculative rounds on the RTL, the verify's
+    ping-pong state, a miss and a hit, every queue byte-identical to the golden model."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_SMALL, ["linear_attention", "full_attention"], vocab=4096)
+    w = {**Q.random_weights(cfg, embed=True), **Q.random_mtp(cfg)}
+    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 23, head=True, queue_cap=4096,
+                         scratch_bytes=1 << 20, verify_rows=2, mtp=True)
+
+    def run(ddr, q, n):
+        st, r = both(bytes(ddr), q, n, stall=10, lat=3)
+        assert st.done
+        return r.ddr
+    seen = []
+
+    def oracle(t, d):                                # the second round's draft is whatever the first gave
+        seen.append(t)
+        return d if len(seen) % 2 else (d + 1) % 4096
+    ids, _, rounds = low.generate_mtp(run, [7, 1000, 42], 3, oracle)
+    assert rounds >= 2 and len(ids) >= 7
+

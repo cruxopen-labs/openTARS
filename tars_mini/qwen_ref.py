@@ -157,6 +157,37 @@ def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
     return w
 
 
+def load_mtp(path) -> dict[str, np.ndarray]:
+    """A checkpoint's MTP head as fp32, under its own names (mtp.*)."""
+    from pathlib import Path
+    from safetensors import safe_open
+    torch = _torch()
+    w = {}
+    for f in sorted(Path(path).glob("*.safetensors")):
+        with safe_open(str(f), framework="pt") as st:
+            for k in st.keys():
+                if k.startswith("mtp."):
+                    w[k] = st.get_tensor(k).to(torch.float32).numpy()
+    if not w:
+        raise ValueError(f"checkpoint {path} has no MTP head")
+    return w
+
+
+def random_mtp(cfg, seed: int = 5) -> dict[str, np.ndarray]:
+    """Random MTP weights with cfg's dimensions (the names and shapes of load_mtp's)."""
+    rng = np.random.default_rng(seed)
+    H, I, hd = cfg.hidden_size, cfg.intermediate_size, cfg.head_dim
+    nq, nkv = cfg.num_attention_heads * hd, cfg.num_key_value_heads * hd
+    lin = {"fc": (H, 2 * H), "layers.0.self_attn.q_proj": (2 * nq, H), "layers.0.self_attn.k_proj": (nkv, H),
+           "layers.0.self_attn.v_proj": (nkv, H), "layers.0.self_attn.o_proj": (H, nq),
+           "layers.0.mlp.gate_proj": (I, H), "layers.0.mlp.up_proj": (I, H), "layers.0.mlp.down_proj": (H, I)}
+    nrm = {"norm": H, "pre_fc_norm_embedding": H, "pre_fc_norm_hidden": H, "layers.0.input_layernorm": H,
+           "layers.0.post_attention_layernorm": H, "layers.0.self_attn.q_norm": hd, "layers.0.self_attn.k_norm": hd}
+    w = {f"mtp.{k}.weight": rng.normal(0, 0.02, s).astype(np.float32) for k, s in lin.items()}
+    w.update({f"mtp.{k}.weight": rng.normal(0, 0.1, n).astype(np.float32) for k, n in nrm.items()})
+    return w
+
+
 def random_inputs(cfg, n_tokens: int, seed: int = 1) -> np.ndarray:
     """Hidden states [T, H]: N(0, 1) with 1 % of the channels 20x larger (LLM-style outliers)."""
     rng = np.random.default_rng(seed)
