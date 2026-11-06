@@ -4,28 +4,32 @@
 
 An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B and Qwen3-0.6B bit-exact on a Xilinx
 Kria KV260**: every logit on the board matches the golden model bit for bit. Qwen3-0.6B decodes at
-**0.08 s/token** and Qwen3.5-0.8B at **0.16 s/token** (100 MHz core clock, bitstream v3.2; 2.6 s/token
-at v1.0) on short contexts, using 86% of the XCK26's LUTs. Qwen3.5-0.8B also has optional speculative
+**0.07 s/token** and Qwen3.5-0.8B at **0.15 s/token** on short contexts (100 MHz core clock; 2.6 s/token
+at v1.0), using 86% of the XCK26's LUTs. Qwen3.5-0.8B also has optional speculative
 decoding with its MTP head (same tokens, bit for bit; see below).
 
 **Demo:** Qwen3.5-0.8B chatting on the KV260 (above; full video: [demo/Qwen3.5-0.8B-Demo.mp4](demo/Qwen3.5-0.8B-Demo.mp4)).
 
 ## Tested models
 
-Both run on the same bitstream (v3.2); only the exported model data differs. Measured on the
+Both run on the same bitstream; only the exported model data differs. Measured on the
 board, 100 MHz core clock, greedy decoding, every step's logits bit-exact against the golden model
 (`run.sh selftest`).
 
 | Model | Layers | Model image on the device (INT8 W8A8 weights + states) | Decode | Prefill (20-token prompt, chunks of 4) | Example chat (31 positions) |
 |---|---|---|---|---|---|
-| [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 24: 18 Gated DeltaNet + 6 gated full attention | 887 MiB | 15.7 M cycles = **0.16 s/token** | 2.29 s = 0.115 s/token | 4.5 s |
-| [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) | 28 full attention (GQA 16/8, QK-norm) | 662 MiB | 7.3-8.2 M cycles = **0.08 s/token** | 0.76 s = 0.038 s/token | 1.9 s |
+| [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 24: 18 Gated DeltaNet + 6 gated full attention | 887 MiB | 15.2 M cycles = **0.15 s/token** | 2.18 s = 0.109 s/token | 4.4 s |
+| [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) | 28 full attention (GQA 16/8, QK-norm) | 662 MiB | 7.5 M cycles = **0.07 s/token** | 0.67 s = 0.034 s/token | 1.8 s |
 
-The Qwen3-0.6B decode figure is for short contexts (measured within the first ~30 positions).
-Attention (FDOT) grows with the context and is already 46% of a step at position 64 in simulation; a
-cost model fitted to these runs estimates about 0.17 s/token at position 128 and 0.27 s/token at 250
-(estimates, not measured). Qwen3.5-0.8B has only 6 attention layers and stays flat: 163-169 ms/token
-measured over 96-token answers. Qwen3.5's prefill is slower per token because its DeltaNet recurrence
+Decode slows as the context grows, because attention reads every earlier key and value. Measured on
+the board (`sw/ctx_bench.py`), in M cycles per token (1 M = 10 ms):
+
+| Position | 16 | 64 | 128 | 192 | 250 |
+|---|---|---|---|---|---|
+| Qwen3-0.6B (28 attention layers) | 7.48 | 9.25 | 11.58 | 13.82 | 15.49 |
+| Qwen3.5-0.8B (6 attention layers) | 15.22 | 15.55 | 16.00 | 16.45 | 16.78 |
+
+Qwen3.5's prefill is slower per token because its DeltaNet recurrence
 runs token by token; Qwen3's attention takes a chunk at once.
 Export a model with `tools/export_kv260.py --ckpt <checkpoint>` (the checkpoint's `model_type` picks
 the lowering); on the board, `sudo ./run.sh chat --data <its data directory>`.
@@ -40,21 +44,21 @@ Greedy output is unchanged: logits are bit-identical to plain decoding, checked 
 `run.sh selftest --data data_mtp`, and multi-turn chats match plain mode. No RTL change was needed.
 
 **It is off by default, because on this hardware it does not pay on average.** A round costs about
-1.85 plain steps: attention and the DeltaNet recurrence scale with the rows verified, and the draft
-reads the 254 MB head as well. It breaks even at about 85% draft hits.
+1.8 plain steps: attention and the DeltaNet recurrence scale with the rows verified, and the draft
+reads the 254 MB head as well. It breaks even at about 80% draft hits.
 
 | Prompt type (`run.sh bench`, up to 96 tokens) | Draft hits | Plain | MTP | Speedup |
 |---|---|---|---|---|
-| JSON list | 100% | 164.5 ms/token | 150.8 ms/token | 1.09x |
-| Open question | 83% | 162.9 | 161.0 | 1.01x |
-| Code edit | 85% | 169.0 | 169.4 | 1.00x |
-| Rewrite | 75% | 169.1 | 180.4 | 0.94x |
-| Advice | 68% | 163.4 | 177.0 | 0.92x |
-| Translate | 69% | 167.4 | 188.6 | 0.89x |
-| Summarize | 69% | 167.4 | 189.5 | 0.88x |
-| Chinese chat | 58% | 162.8 | 184.9 | 0.88x |
-| Story | 55% | 163.6 | 192.2 | 0.85x |
-| **Mean** | | | | **0.94x** |
+| JSON list | 100% | 156.1 ms/token | 141.6 ms/token | 1.10x |
+| Open question | 83% | 155.1 | 151.8 | 1.02x |
+| Code edit | 85% | 158.8 | 157.1 | 1.01x |
+| Rewrite | 75% | 159.0 | 166.7 | 0.95x |
+| Advice | 68% | 155.4 | 166.6 | 0.93x |
+| Summarize | 65% | 158.1 | 176.3 | 0.90x |
+| Translate | 66% | 157.9 | 175.7 | 0.90x |
+| Chinese chat | 58% | 155.1 | 174.5 | 0.89x |
+| Story | 55% | 155.5 | 181.1 | 0.86x |
+| **Mean** | | | | **0.95x** (wall clock 0.93x) |
 
 To try it: `python tools/export_kv260.py --mtp --out deploy/kv260/data_mtp`, then on the board
 `sudo ./run.sh chat --data data_mtp --spec` (`sudo ./run.sh bench --data data_mtp` for the table above).

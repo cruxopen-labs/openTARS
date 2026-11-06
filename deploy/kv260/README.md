@@ -11,6 +11,9 @@
   各 128 位 @ 250 MHz，经核心顶层内的异步 FIFO 跨时钟；写口 256 位；GEMV 单元一次至多 4 行、每拍 128 字节权重；
   权重 128 字节对齐）：Vivado 2025.2，XCK26，100 / 250 MHz 时序收敛（WNS +0.176 ns，WHS +0.010 ns）；
   LUT 100,743 (86.0%)、DSP 879、BRAM 118。
+- **FDOT 优化（2026-11-07，比特流沿用 VERSION 0x00030100）：** 折叠与下一个输出重叠、Q 留在片上、NN 每 4 个 k 读一次 A；
+  结果逐比特不变。WNS +0.187 ns，LUT 100,316 (85.65%)、DSP 879、BRAM 120。实测 decode：Qwen3-0.6B t=250 快 1.40×，
+  Qwen3.5-0.8B 快 1.05–1.10×。上一版比特流在板上 `firmware_v32/`。
 - **实板（v3.2，2026-11-03）：`run.sh hw` 24/24、`run.sh selftest` ALL PASS，每一步 logits 与 golden model 逐比特一致；
   decode 约 15.7 M 周期/token ≈ 0.16 s/token（v3.0：0.21）；20 token 的对话提示分块 prefill 2.29 s ≈ 0.115 s/token；
   对话示例全程 4.5 s（v3.0：4.9 s）。** v3.0 的固件和数据在 `firmware_v30/`、`data_v30/`（换回：把两个目录改名回 `firmware`、`data`，
@@ -19,8 +22,8 @@
   decode 约 21 M 周期/token ≈ 0.21 s/token；提示词按 4 个 token 分块 prefill ≈ 0.12 s/token
   （v1.0：2.6 s/token；v1.1：0.90；v1.3：0.73；v1.4：0.60；v2.0：0.36）。
 - **MTP 投机解码（可选，默认关闭）：** 用 `tools/export_kv260.py --mtp --out deploy/kv260/data_mtp` 导出后，
-  `sudo ./run.sh chat --data data_mtp --spec`；输出与普通解码逐比特相同。实测平均 0.94×（命中率约 85% 才不亏，
-  最好的 JSON 任务 1.09×），`sudo ./run.sh bench --data data_mtp` 可复现对比。
+  `sudo ./run.sh chat --data data_mtp --spec`；输出与普通解码逐比特相同。实测平均 0.95×（命中率约 80% 才不亏，
+  最好的 JSON 任务 1.10×），`sudo ./run.sh bench --data data_mtp` 可复现对比。
 - RTL 回归（FPGA 版，经 KV260 顶层：AXI-Lite + 四读口突发桥 + 页表打乱 + 随机背压/延迟）386 通过 / 22 跳过（conv 与阵列专用用例）、核心 testbench 425/425 逐字节一致。
 - **完整 Qwen3.5-0.8B（真实权重）经本目录的板上软件（`tars_board.Qwen`，后端换成 RTL 仿真）与
   KV260 顶层 RTL 运行，logits 与 golden model 逐比特一致**；单 token 84.8 M 周期 ≈ **0.85 s/token**

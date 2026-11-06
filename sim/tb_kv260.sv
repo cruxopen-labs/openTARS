@@ -31,7 +31,7 @@ module tb_kv260 #(
 
   logic [127:0] pmem [WORDS];                                 // physical memory (the window)
   logic [127:0] cmem [WORDS];                                 // the image in the core's order (loading)
-  int unsigned  stall = 0, lat = 2, seed = 1;
+  int unsigned  stall = 0, wstall = 0, lat = 2, seed = 1;   // wstall: the write channel's alone
   int unsigned  nout = 0, blat = 0, artrace = 0;   // artrace: print 3000 AR bursts after this many   // board-like: at most nout read bursts in flight (0: any), blat more cycles of latency
   longint unsigned maxcyc = 64'd50_000_000, now = 0, hnow = 0;
 
@@ -211,7 +211,8 @@ module tb_kv260 #(
       end
     end
     m_awready <= ($urandom_range(99, 0) >= stall) && (nout == 0 || wb_out < nout);   // wb_out: after this cycle's
-    m_wready  <= ($urandom_range(99, 0) >= stall);
+    // wstall 100: the write channel shut for long stretches, so the core's output queue fills
+    m_wready  <= (wstall >= 100) ? now[11:9] == 3'd0 : ($urandom_range(99, 0) >= ((wstall > stall) ? wstall : stall));
   end
 
   // ---------------------------------------------------------------- AXI-Lite master
@@ -251,6 +252,7 @@ module tb_kv260 #(
     longint unsigned cyc;
     awvalid = 1'b0; wvalid = 1'b0; bready = 1'b0; arvalid = 1'b0; rready = 1'b0;
     void'($value$plusargs("stall=%d", stall));
+    void'($value$plusargs("wstall=%d", wstall));
     void'($value$plusargs("lat=%d", lat));
     void'($value$plusargs("seed=%d", seed));
     void'($value$plusargs("nout=%d", nout));

@@ -98,6 +98,40 @@ def test_fdot_on_rtl(nn, out):
     assert st.done
 
 
+@pytest.mark.parametrize("nn", [False, True])
+@pytest.mark.parametrize("M,N,K,stall", [(1, 16, 16, 0), (3, 48, 16, 30), (2, 16, 32, 0), (1, 32, 1024, 0),
+                                         (2, 16, 1024, 20), (2, 16, 1040, 0), (3, 64, 128, 40), (4, 16, 48, 0)])
+def test_fdot_passes_overlap_on_rtl(nn, M, N, K, stall):
+    """FDOT's pass ends running behind the next pass, A's row kept on chip (NT, K <= 1024; 1040: the
+    plain path), an A beat every 4 k (NN): passes shorter than the fold, the kept row's limit, rows
+    after the first, and two descriptors back to back (the second must not catch the first's fold)."""
+    rng = np.random.default_rng(M * 1000 + N * 7 + K + int(nn))
+    p = Dev(ddr_bytes=1 << 19)
+    a = p.const(_r(rng, M, K))
+    y = [p.mat(M, N) for _ in range(2)]
+    for yi in y:
+        b = p.const(_r(rng, K, N) if nn else _r(rng, N, K))
+        p.fdot(a, b, yi, nn=nn)
+    st, _ = _both(p, stall=stall, lat=3)
+    assert st.done
+
+
+@pytest.mark.skipif(rtlsim.TOP != "kv260", reason="the KV260 testbench's write-only stall")
+@pytest.mark.parametrize("nn", [False, True])
+def test_fdot_fold_waits_for_a_full_output_queue(nn, monkeypatch):
+    """Short passes against a write channel shut for long stretches: the output queue fills, a readout waits, and the
+    next pass must not overwrite the fold's input. K = 16, many outputs."""
+    monkeypatch.setenv("TM_TBARGS", "+wstall=100")
+    rng = np.random.default_rng(11 + int(nn))
+    M, N, K = 2, 1024, 16
+    p = Dev(ddr_bytes=1 << 19)
+    a = p.const(_r(rng, M, K))
+    b = p.const(_r(rng, K, N) if nn else _r(rng, N, K))
+    p.fdot(a, b, p.mat(M, N), nn=nn)
+    st, _ = _both(p, stall=0, lat=2)
+    assert st.done
+
+
 def test_quant_l2_causal_and_rowcol_gemm_on_rtl():
     """A W8A8 linear (QUANT + ROWCOL GEMM with softplus fused), an L2NORM and a causal softmax."""
     from tars_mini.compiler import quantize_weight
