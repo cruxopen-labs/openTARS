@@ -116,6 +116,45 @@ def test_fdot_passes_overlap_on_rtl(nn, M, N, K, stall):
     assert st.done
 
 
+@pytest.mark.parametrize("nn,M,N,K,out,stall", [
+    (False, 1, 16, 32, C.OUT_FP32, 0), (False, 3, 80, 128, C.OUT_FP32, 25), (False, 2, 32, 256, C.OUT_BF16, 0),
+    (False, 2, 16, 512, C.OUT_INT8, 10), (False, 1, 4096 // 16, 64, C.OUT_FP32, 0), (False, 2, 48, 96, C.OUT_FP32, 40),
+    (True, 1, 64, 16, C.OUT_FP32, 0), (True, 3, 128, 80, C.OUT_FP32, 25), (True, 2, 192, 48, C.OUT_BF16, 0),
+    (True, 2, 64, 256, C.OUT_INT8, 10), (True, 1, 256, 32, C.OUT_FP32, 40)])
+def test_fdot_16_products_on_rtl(nn, M, N, K, out, stall):
+    """FDOT at 16 products a cycle: NT groups of 4 keys, NN 64 columns, the four lane banks, every output
+    format, rows after the first, two descriptors back to back."""
+    rng = np.random.default_rng(N * 31 + K + M + int(nn))
+    p = Dev(ddr_bytes=1 << 20)
+    a = p.const(_r(rng, M, K))
+    ys = [p.mat(M, N, out) for _ in range(2)]
+    for y in ys:
+        b = p.const(_r(rng, K, N) if nn else _r(rng, N, K))
+        p.fdot(a, b, y, nn=nn)
+        if out == C.OUT_INT8:
+            p.descs[-1] = C.encode({**C.decode(p.descs[-1]), "OUT_SCALE": C.f32_bits(3.0)})
+    st, _ = _both(p, stall=stall, lat=3)
+    assert st.done
+
+
+@pytest.mark.parametrize("nn", [False, True])
+@pytest.mark.parametrize("what", ["a", "b", "ldb", "n", "k"])
+def test_fdot_shapes_off_the_16_product_path(nn, what):
+    """Operands off the 128-byte grid, or shapes it does not take, keep the 4-lane path: same bytes."""
+    rng = np.random.default_rng(len(what) * 2 + int(nn) + ord(what[0]))
+    M, N, K = 2, (48 if what == "n" else 64), (48 if what == "k" else 64)
+    p = Dev(ddr_bytes=1 << 19)
+    wide = 4 if what == "ldb" else 0                   # a row stride off 128 bytes
+    ax = _r(rng, M, K + 32)                            # strides on the grid unless `what` says otherwise
+    bx = _r(rng, K, N + 32 + wide) if nn else _r(rng, N, K + 32 + wide)
+    A, B = p.const(ax), p.const(bx)
+    av = V(A.off + (16 if what == "a" else 0), M, K, A.ld)
+    bv = V(B.off + (16 if what == "b" else 0), K if nn else N, N if nn else K, B.ld)
+    p.fdot(av, bv, p.mat(M, N), nn=nn)
+    st, _ = _both(p, stall=10, lat=3)
+    assert st.done
+
+
 @pytest.mark.skipif(rtlsim.TOP != "kv260", reason="the KV260 testbench's write-only stall")
 @pytest.mark.parametrize("nn", [False, True])
 def test_fdot_fold_waits_for_a_full_output_queue(nn, monkeypatch):
@@ -123,11 +162,12 @@ def test_fdot_fold_waits_for_a_full_output_queue(nn, monkeypatch):
     next pass must not overwrite the fold's input. K = 16, many outputs."""
     monkeypatch.setenv("TM_TBARGS", "+wstall=100")
     rng = np.random.default_rng(11 + int(nn))
-    M, N, K = 2, 1024, 16
-    p = Dev(ddr_bytes=1 << 19)
-    a = p.const(_r(rng, M, K))
-    b = p.const(_r(rng, K, N) if nn else _r(rng, N, K))
-    p.fdot(a, b, p.mat(M, N), nn=nn)
+    M, N = 2, 1024
+    p = Dev(ddr_bytes=1 << 20)
+    for K in (16, 32):                                 # the 4-lane path, then (NT) groups of 4 keys
+        a = p.const(_r(rng, M, K))
+        b = p.const(_r(rng, K, N) if nn else _r(rng, N, K))
+        p.fdot(a, b, p.mat(M, N), nn=nn)
     st, _ = _both(p, stall=0, lat=2)
     assert st.done
 

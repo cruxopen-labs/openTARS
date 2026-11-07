@@ -22,7 +22,7 @@
 // says halted and idle.
 //
 // Registers (byte offsets, 32 bits):
-//   0x000 ID        "TARS" (0x54415253)          0x004 VERSION  0x00030100
+//   0x000 ID        "TARS" (0x54415253)          0x004 VERSION  0x00030300
 //   0x008 CTRL      [0] start (write 1: a pulse)  [1] core reset (level, 1 = held in reset)
 //   0x00C STATUS    [0] halted [1] done [7:4] err_code [8] bridge idle [9] read error (sticky)
 //                   [10] write error (sticky) [11] core in reset
@@ -237,7 +237,7 @@ module tm_kv260_top #(
         s_axil_rvalid <= 1'b1;
         case ({s_axil_araddr[13:2], 2'b00})
           14'h000: s_axil_rdata <= 32'h5441_5253;
-          14'h004: s_axil_rdata <= 32'h0003_0100;
+          14'h004: s_axil_rdata <= 32'h0003_0300;
           14'h008: s_axil_rdata <= {30'b0, ctl_rst, 1'b0};
           14'h00C: s_axil_rdata <= {20'b0, core_rst, err_w, err_r, br_idle, err_code, 2'b0, done, halted};
           14'h010: s_axil_rdata <= op_idx;
