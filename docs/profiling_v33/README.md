@@ -128,9 +128,11 @@ model files and the existing runtime scripts were not overwritten.
 
 After collecting these reports, the original installed bitstream was restored,
 its SHA-256 checked, and its full Qwen3.5 board selftest passed again. At the end of
-this profiling experiment the board ran the original, not instrumented firmware. The staged
-profiler software, results, backup and instrumented `profile.bit.bin` remain under
-`/home/ubuntu/tars_profile_20261108`. The rebuilt local image is
+this profiling experiment the board ran the original, not instrumented firmware.
+After consolidating the board directories, the profiler software is in `~/tars`,
+results in `~/tars/results/profile_v33/`, the original firmware in `~/tars/firmware/`,
+and the instrumented image in `~/tars/firmware_v33_profile/tars_kv260/`.
+The rebuilt local image is
 `build/profile_v33_artifacts/tars_kv260.bit.bin` (preserved before the v3.4 rebuild);
 checked-in deployment binaries were not replaced.
 
@@ -138,8 +140,13 @@ To reactivate the staged profiling image, first ensure no TARS run is active, th
 on the board (loading interrupts FPGA use):
 
 ```sh
-cd /home/ubuntu/tars_profile_20261108
-sudo install -m 644 profile.bit.bin /lib/firmware/xilinx/tars_kv260/tars_kv260.bit.bin
+cd /home/ubuntu/tars
+sudo install -m 644 firmware_v33_profile/tars_kv260/tars_kv260.bit.bin \
+    /lib/firmware/xilinx/tars_kv260/tars_kv260.bit.bin
 sudo ./run.sh profile --data data --positions 16,64,128,192,250 \
-    --require-operators --out results/qwen35-new.json
+    --require-operators --out results/profile_v33/qwen35-new.json
 ```
+
+After profiling, restore `firmware/tars_kv260/tars_kv260.bit.bin` to the same
+`/lib/firmware/xilinx/tars_kv260/tars_kv260.bit.bin` destination and rerun the
+ordinary selftest. `run.sh` does not select archived experimental firmware.

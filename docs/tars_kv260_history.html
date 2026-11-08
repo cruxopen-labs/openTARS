@@ -86,20 +86,20 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
 <body>
 
 <header class="hero"><div class="wrap">
-  <div class="eyebrow">Project log · 2026-10-31 → 2026-11-03 · XCK26 @ 100 MHz</div>
-  <h1>TARS-mini on KV260：在一块 FPGA 上逐比特跑通 Qwen3.5-0.8B 和 Qwen3-0.6B</h1>
-  <p class="lede">从 ASIC 参考设计出发，经过面积压缩、板卡 bring-up 和 7 个上板版本的访存与计算迭代，decode 从 2.6 s/token 降到 0.16 s/token（16 倍）。同一个比特流不改硬件又跑通了 Qwen3-0.6B，decode 0.08 s/token。每一步的 logits 都与 golden 模型逐比特一致。</p>
+  <div class="eyebrow">Project log · 2026-10-31 → 2026-11-08 · XCK26 @ 100 MHz</div>
+  <h1>TARS-mini on KV260：在一块 FPGA 上逐比特跑通 Qwen3.5-0.8B、Qwen3-0.6B 和 Gemma 3 1B</h1>
+  <p class="lede">从 ASIC 参考设计出发，经过面积压缩、板卡 bring-up 和 9 个上板性能版本的访存与计算迭代（另有计数器和 FP16 实验版），Qwen3.5-0.8B 的 decode 从 2.6 s/token 降到 0.13 s/token（20 倍）。同一个比特流不改硬件又跑通了 Qwen3-0.6B（0.07 s/token）和 Gemma 3 1B（0.09 s/token）。自检中每一步的 logits 都与 golden 模型逐比特一致。</p>
   <div class="kpis">
-    <div class="kpi"><b>0.16 s</b><span>Qwen3.5-0.8B decode / token（v1.0 为 2.6 s）</span></div>
-    <div class="kpi"><b>0.08 s</b><span>Qwen3-0.6B decode / token，同一比特流</span></div>
-    <div class="kpi"><b>0.115 s</b><span>prefill / token，4 个 token 一块</span></div>
-    <div class="kpi"><b>4.5 s</b><span>31 个位置的示例对话（v1.0 约 80 s）</span></div>
-    <div class="kpi"><b>86.0%</b><span>LUT 占用，100,743 / 117,120</span></div>
+    <div class="kpi"><b>0.13 s</b><span>Qwen3.5-0.8B decode / token（v1.0 为 2.6 s）</span></div>
+    <div class="kpi"><b>0.07 s</b><span>Qwen3-0.6B decode / token，同一比特流</span></div>
+    <div class="kpi"><b>0.09 s</b><span>Gemma 3 1B decode / token，同一比特流</span></div>
+    <div class="kpi"><b>3.7 s</b><span>Qwen3.5 31 个位置的示例对话（v1.0 约 80 s）</span></div>
+    <div class="kpi"><b>89.6%</b><span>LUT 占用（v3.3），104,879 / 117,120</span></div>
   </div>
 </div></header>
 
 <nav class="toc" aria-label="目录"><div class="wrap">
-  <a href="#asic">1 ASIC 起点</a><a href="#port">2 FPGA 移植</a><a href="#deploy">3 部署方案</a><a href="#iter">4 提速迭代</a><a href="#qwen3">5 换模型</a><a href="#lessons">6 启示</a><a href="#open">7 未完成</a>
+  <a href="#asic">1 ASIC 起点</a><a href="#port">2 FPGA 移植</a><a href="#deploy">3 部署方案</a><a href="#iter">4 提速迭代</a><a href="#qwen3">5 换模型</a><a href="#more">6 更多模型与功能</a><a href="#lessons">7 启示</a><a href="#open">8 未完成</a>
 </div></nav>
 
 <main class="wrap">
@@ -214,6 +214,7 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
     <div class="row"><div class="lb">v2.0</div><div class="track"><div class="bar" style="width:13.8%"><span class="val">0.36</span></div><div class="bar b2" style="width:5.8%"><span class="val">0.15</span></div></div></div>
     <div class="row"><div class="lb">v3.0</div><div class="track"><div class="bar" style="width:8.1%"><span class="val">0.21</span></div><div class="bar b2" style="width:4.5%"><span class="val">0.118</span></div></div></div>
     <div class="row"><div class="lb">v3.2</div><div class="track"><div class="bar" style="width:6.2%"><span class="val">0.16</span></div><div class="bar b2" style="width:4.4%"><span class="val">0.115</span></div></div></div>
+    <div class="row"><div class="lb">v3.3</div><div class="track"><div class="bar" style="width:5.1%"><span class="val">0.13</span></div><div class="bar b2" style="width:3.4%"><span class="val">0.089</span></div></div></div>
     <div class="legend"><span><i style="background:var(--accent)"></i>decode</span><span><i style="background:var(--bar2)"></i>prefill</span></div>
   </div>
 
@@ -227,7 +228,11 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
     <tr><td class="n">v2.0</td><td>32 B 读口；HP0 200 MHz；GEMV 每拍 32 B；PE 改 DSP</td><td class="n">0.36 s</td><td class="n">0.15 s</td><td class="n">7.1 s</td><td class="n">36 M</td><td class="n">89.4%</td></tr>
     <tr><td class="n">v3.0</td><td>64 B 读口；按 1 KB 交错分到 HP0+HP3，各 250 MHz，异步 FIFO 直连；GEMV 每拍 64 B、一次 4 行</td><td class="n">0.21 s</td><td class="n">0.118 s</td><td class="n">4.9 s</td><td class="n">21.0 M</td><td class="n">90.8%</td></tr>
     <tr class="dead"><td class="n">v3.1</td><td>去掉脉动阵列，GEMM 全走 GEMV（仅仿真，并入 v3.2）</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
-    <tr class="hl"><td class="n">v3.2</td><td>无阵列；128 B 读口，四个 HP 口；GEMV 每拍 128 B；权重 128 B 对齐</td><td class="n">0.16 s</td><td class="n">0.115 s</td><td class="n">4.5 s</td><td class="n">15.7 M</td><td class="n">86.0%</td></tr>
+    <tr><td class="n">v3.2</td><td>无阵列；128 B 读口，四个 HP 口；GEMV 每拍 128 B；权重 128 B 对齐</td><td class="n">0.16 s</td><td class="n">0.115 s</td><td class="n">4.5 s</td><td class="n">15.7 M</td><td class="n">86.0%</td></tr>
+    <tr><td class="n">v3.2b</td><td>FDOT 各遍重叠、Q 留在片上（VERSION 寄存器不变）</td><td class="n">快 1.05–1.10×</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">85.65%</td></tr>
+    <tr class="hl"><td class="n">v3.3</td><td>FDOT 每周期 16 次乘加（4 组 lane 轮流累加，128 B 读）</td><td class="n">0.13 s</td><td class="n">0.089 s</td><td class="n">3.7 s</td><td class="n">13.2 M</td><td class="n">89.55%</td></tr>
+    <tr class="dead"><td class="n">v3.3+计数器</td><td>分算子周期计数器（实验，未替换默认固件）</td><td class="n">同 v3.3</td><td class="n">—</td><td class="n">—</td><td class="n">13.2 M</td><td class="n">89.62%</td></tr>
+    <tr class="dead"><td class="n">v3.4</td><td>可选 FP16 DeltaNet 状态（实验，未替换默认固件）</td><td class="n">FP16 导出慢 3%</td><td class="n">+2.2%</td><td class="n">—</td><td class="n">13.6 M（FP16）</td><td class="n">90.50%</td></tr>
   </table></div>
 
   <div class="ver"><h3><span class="tag">v1.1</span>读突发</h3>
@@ -289,6 +294,32 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
     <p><b>效果</b>：回归 386 通过 / 22 跳过（conv 与阵列专用用例），核心 testbench 425/425；时序 WNS +0.176 ns，LUT 86.0%，DSP 879，BRAM 118。板上 ALL PASS，decode 15.7 M 周期 = <b>0.16 s/token</b>，示例对话 4.5 s。prefill 几乎没变（0.115 s），因为分块 GEMV 已受算力而非带宽限制。</p>
   </div>
 
+  <div class="ver"><h3><span class="tag">v3.2b</span>FDOT 各遍重叠</h3>
+    <p><b>瓶颈</b>：v3.2 之后 GEMV 已贴近读口带宽，注意力里的 FDOT（QK<sup>T</sup> 和 PV）变成长上下文时的主要开销。每一遍结束时要等折叠（fold）和读出完成，下一遍才能开始。</p>
+    <p><b>改动</b>：一遍结束后不再挡住下一遍，折叠和读出在后台进行；NT 方向把 A 的一行（K ≤ 1024）在第一次输出后留在 BRAM 里，读量减半；NN 方向每 4 个 k 才读一次 A。每个 lane 的累加顺序不变，结果逐比特不变。只改 FPGA 构建（<code>TM_FPGA</code>），VERSION 寄存器仍是 0x00030100。</p>
+    <p><b>测试漏洞</b>：去掉折叠的保护条件时，原有测试全部通过。原因是输出队列从来没被写满。加了 <code>+wstall=100</code> 的 testbench 模式把输出队列塞满，才抓到这个问题。</p>
+    <p><b>效果</b>：Qwen3-0.6B 在位置 16 快 1.10×、位置 250 快 1.40×；Qwen3.5-0.8B 快 1.05–1.10×。WNS +0.187 ns，LUT 85.65%，BRAM 120。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">v3.3</span>FDOT 每周期 16 次乘加</h3>
+    <p><b>改动</b>：4 组 lane 轮流累加，每个 lane 保持 3 周期加法和契约规定的 k 顺序。NT 一次处理 4 个 key、128 B 读，A 的一行放在 GEMV 空闲的 x 缓冲里，一组的数据按地址从 FIFO 取；NN 一次处理 64 列。其他形状仍走原来的 4 lane 路径。</p>
+    <p><b>问题</b>：第一版 LUT 99%，布局失败。把 lane 改成带有效位的小 LUT 存储器后才放得下。</p>
+    <p><b>效果</b>：相对上一版，Qwen3-0.6B 在位置 16 快 1.23×、位置 250 快 2.28×；Qwen3.5-0.8B 快 1.21–1.36×，decode 13.2–13.6 M 周期 = <b>0.13 s/token</b>。WNS +0.013 ns，LUT 89.55%，DSP 903，BRAM 118，VERSION 0x00030300。这是当前的默认固件。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag">测量</span>分算子周期计数器</h3>
+    <p>为了知道下一步该优化什么，在 v3.3 上加了一组计数器（<code>PROFILE_CAP</code> = 0x50524601）：按 GEMV、ELT、FDOT NT/NN、RoPE、QUANT、Norm、Softmax、ACT 和取指/校验开销分别累计周期，各类之和必须正好等于核心周期。<code>run.sh profile</code> 读取它们；旧固件只给总读写量和等待计数。</p>
+    <p><b>正确性</b>：加计数器前后所有共同采样位置的 logits 哈希相同，首次 decode 测量慢 0.005–0.103%；一次 Qwen3 位置 250 的重复测量慢约 0.60%，不能据此断言计数器零开销。两次独立实现的 LUT 相差 88 个（89.62%），并非孤立的计数器面积估计；WNS +0.044 ns。</p>
+    <p><b>结论</b>：Qwen3-0.6B 短上下文时 GEMV 占 76%，到位置 250 时 FDOT 升到 32%；Qwen3.5-0.8B 的 ELT（DeltaNet 状态更新）占 35–36%，读带宽只有约 6.9 GB/s。详见 <code>docs/profiling_v33/</code>。</p>
+  </div>
+
+  <div class="ver"><h3><span class="tag w">v3.4</span>FP16 DeltaNet 状态（实验）</h3>
+    <p><b>动机</b>：剖析显示 Qwen3.5 的 ELT 主要在读写 DeltaNet 状态 S。把 S 存成 FP16，读写量能少一半吗？</p>
+    <p><b>改动</b>：只有 S 以 packed IEEE FP16 存储，衰减和更新写回时按最近偶数舍入；读回后乘、加、归一化和 SFU 都仍是 FP32。描述符用以前保留的编码选 FP16 的 ELT 输入/输出和 FDOT NN 的 B。导出时用 <code>--state-dtype fp16</code>，需要 VERSION 0x00030400，运行时会拒绝旧固件。</p>
+    <p><b>验证</b>：板上 FP32 和 FP16 两份导出各自与 golden 逐比特一致；另用"FP32 程序 + NumPy 只对 S 舍入"的影子模型核对，结果逐比特相同。WNS +0.008 ns，LUT 90.50%。</p>
+    <p><b>结果</b>：<b>反而慢了 3%</b>（decode 131.6 → 135.7 ms），prefill 慢 2.2%。ELT 仍是每次 16 B 读取 4 个半精度值，请求数没变，转换还增加了延迟；读量每步只少约 3.9 MB，写量少 18 MB。精度上约 10% 的位置 top-1 改变（英文 90.87%、中文 89.08% 一致）。所以默认仍用 FP32，v3.4 没有替换默认固件，只在板上 <code>firmware_v34/</code> 存档。详见 <code>docs/fp16_state_v34/</code>。</p>
+  </div>
+
   <h3>每一版固定的验证流程</h3>
   <ol>
     <li>修改 RTL，lint。</li>
@@ -335,8 +366,42 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
   <p>decode 快一倍：每 token 读的数据少（镜像 662 vs 887 MiB，词表也小），也没有 DeltaNet 状态的逐头读写。prefill 快三倍：Qwen3.5 的 DeltaNet 递推只能逐 token 做，而注意力可以整块处理。</p>
 </section>
 
-<section id="lessons">
+<section id="more">
   <div class="sec-no">06</div>
+  <h2>更多模型与功能：MTP 投机解码、Gemma 3 1B、按模型启动</h2>
+
+  <h3>Qwen3.5-0.8B 的 MTP 投机解码（2026-11-06）</h3>
+  <p>Qwen3.5-0.8B 的 checkpoint 带一个多 token 预测头（一层门控注意力，2,000 万参数），在 NPU 上作为草稿模型运行。每一轮用一个两行的块同时验证 [当前 token, 草稿]：猜中得到两个 token，猜错得到一个。DeltaNet 状态不做快照：验证的第二个 token 写到第二份状态，猜中时两份状态互换，所以猜错不需要拷贝。贪心输出与普通解码逐比特相同，板上自检和多轮对话都核对过，RTL 不用改。</p>
+  <p><b>默认关闭</b>：一轮的代价约等于 1.76 个普通步（注意力和递推随验证行数增加，草稿还要再读一遍 254 MB 的输出层），要约 77% 的命中率才不亏。v3.3 上 9 类提示词平均 0.97×，最好的 JSON 列表 1.13×。</p>
+
+  <h3>Gemma 3 1B（2026-11-08）</h3>
+  <p>同样没改 RTL，用的就是板上已有的 v3.3 固件。按 v3.3 的限制（K ≤ 4096、镜像 ≤ 1 GB）对照 gemma-3-1b-it：</p>
+  <div class="tbl"><table>
+    <tr><th>特点</th><th>处理</th></tr>
+    <tr><td>26 层，5 层滑动窗口（512）配 1 层全局</td><td>窗口比上下文 256 长，结果等于全注意力；两类层各用一张 RoPE 表（θ = 10<sup>4</sup> / 10<sup>6</sup>）</td></tr>
+    <tr><td>每层 4 个 RMSNorm（1 + w），QK-norm</td><td>注意力输出和 MLP 输出在残差相加前再做一次 norm；缩放 256<sup>−1/2</sup> = 1/16 并入 q_norm 的 γ，精确</td></tr>
+    <tr><td>GeGLU（tanh 近似 GELU）</td><td>已有的 <code>ACT_GELU</code></td></tr>
+    <tr><td><code>down_proj</code> K = 6912 &gt; 4096</td><td>整行做 per-channel 量化，存成两个 K = 3456 的块，共用 scale，部分积在 FP32 里相加</td></tr>
+    <tr><td>embedding 乘 √1152，词表 262,144</td><td>主机查 bf16 表后乘 fp32(√1152)；输出层用未缩放的表，分 8 块，每块 32,768 行</td></tr>
+    <tr><td>对话格式：<code>&lt;bos&gt;</code>、<code>&lt;end_of_turn&gt;</code></td><td>manifest 记下 BOS（只在位置 0）、轮次结束符和结束 token；拼出的多轮 token 序列与官方模板一致</td></tr>
+  </table></div>
+  <p><b>内存</b>：T = 256 时镜像 1008 MiB，1 GB 地址空间只剩约 16 MiB；T = 384 已放不下。</p>
+  <p><b>验证</b>：小维度 Gemma 在 golden 上与 transformers 的 Gemma3TextModel（同样 W8A8）相差 ≤ 1e-5，token 一致；故意交换两张 RoPE 表或去掉注意力后的 norm，误差升到 6e-2 和 0.38，测试能抓到。小维度在 KV260 顶层 RTL 上与 golden 逐字节一致。上板：硬件测试 24/24，两个提示词 41 个位置逐比特一致。</p>
+  <p><b>精度</b>：与 FP32 原模型逐位置对比，W8A8 的 top-1 一致率 84–89%，困惑度升高 3–5%（英文 17.69 → 18.53，中文 46.42 → 48.91）。</p>
+  <div class="tbl"><table>
+    <tr><th>板上实测（v3.3，100 MHz）</th><th>Gemma 3 1B</th></tr>
+    <tr><td>decode</td><td class="n">9.4 M 周期（位置 16）到 10.3 M（位置 250）= 0.09–0.10 s/token，读带宽约 11 GB/s</td></tr>
+    <tr><td>prefill（17 token，4 个一块）</td><td class="n">0.68 s = 0.040 s/token</td></tr>
+    <tr><td>对话（含 Python 开销）</td><td class="n">约 10 token/s</td></tr>
+  </table></div>
+  <p><b>板上问题</b>：自检之后紧接着启动对话，hugepage 只分到 401/528 个。Gemma 的镜像和 embedding 约 1.6 GB，读进页缓存后把内存弄碎了。运行时改为：hugepage 不够时先丢掉干净的页缓存、整理内存，再申请一次。</p>
+
+  <h3>按模型启动（2026-11-08）</h3>
+  <p>板上只保留一个 <code>~/tars</code> 目录，各模型的数据并列放在 <code>data/</code>、<code>data_mtp/</code>、<code>data_qwen3/</code>、<code>data_gemma3/</code>。<code>run.sh</code> 的第一个参数选模型：<code>sudo ./run.sh gemma3 chat</code>、<code>sudo ./run.sh qwen3 selftest</code>；不写时是 Qwen3.5-0.8B，原来的写法都还能用。四个模型共用 v3.3 固件，实验用的比特流只存档，<code>run.sh</code> 不会加载。</p>
+</section>
+
+<section id="lessons">
+  <div class="sec-no">07</div>
   <h2>给未来迭代的启示</h2>
   <h3>方法</h3>
   <ol class="lessons">
@@ -362,23 +427,29 @@ footer{padding-block:40px 60px;color:var(--muted);font-size:13px}
     <li><b>改一个参数时，查清所有共用它的地方。</b>v3.2 的读突发上限和写计数器共用一个位宽参数，只改读侧就让写侧溢出。不同用途的宽度应各自定义。</li>
     <li><b>硬件只认描述符，换模型就是换软件。</b>契约里没有模型概念，Qwen3-0.6B 的移植只改了降级器、参考模型和导出脚本，RTL 和比特流一点没动。先对照硬件限制（K、地址空间、上下文）选模型，再用"小维度对 transformers、小维度上 RTL、全模型上板"三步验证。</li>
     <li><b>板上的"不可能"值要按平台核实。</b>"物理页号 0 不可能出现"在 x86 上大致成立，在 ZynqMP 上不成立；这个隐患从 v1.0 就存在，直到某次重启后才触发。</li>
+    <li><b>测试要能把队列塞满。</b>v3.2b 去掉折叠的保护条件，原有测试全部通过，因为输出队列从来没满过。反压要强到让每个缓冲都到达上限。</li>
+    <li><b>省下存储不等于省下时间。</b>v3.4 把状态减半，读请求数却没变，反而慢了 3%。先用计数器确认瓶颈是字节数还是请求数，再决定改数据格式还是改读取方式。</li>
+    <li><b>超出硬件限制的形状，先看能不能在软件里拆开。</b>Gemma 的 K = 6912 超过 GEMV 上限，拆成两个 K 块、共用 scale、FP32 相加，就不用改 RTL。</li>
+    <li><b>大模型的数据会挤占 hugepage。</b>1.6 GB 的文件读进页缓存后，内存碎片让 528 个 hugepage 凑不齐。申请失败时先释放干净的页缓存并整理内存，不必重启。</li>
   </ol>
 </section>
 
 <section id="open">
-  <div class="sec-no">07</div>
+  <div class="sec-no">08</div>
   <h2>未完成或未验证</h2>
   <div class="note">
     <ul>
       <li>移植副本 <code>tars_mini_fpga</code> 的 ASIC 构建回归没有跑完：内存不足时被系统中止于 35%，有 2 个失败还没诊断。原 <code>tars_mini</code> 的 ASIC 构建不受影响。</li>
       <li>本项目没有重新跑完 ASIC 构建的全模型 RTL decode 仿真。FPGA 构建的全模型已在 RTL 上做过逐比特验证。</li>
       <li>FPGA 改动后没有重跑 <code>mutate_rtl.py</code> 全量变异测试，只对新路径做了植入 bug 检查。</li>
-      <li>v3.2 比特流不再支持 conv 和 K &gt; 4096 的 GEMM（返回 E_OPCODE）。需要它们时可以换回 v3.0 固件（<code>firmware_v30</code>、<code>data_v30</code>），ASIC 构建不受影响。</li>
+      <li>v3.2 起的比特流不再支持 conv 和 K &gt; 4096 的 GEMM（返回 E_OPCODE）。需要它们时可以换回 v3.0 固件（<code>firmware_v30</code>、<code>data_v30</code>），ASIC 构建不受影响。</li>
+      <li>v3.4（FP16 状态）只做了实验，时序余量只有 +0.008 ns，没有替换默认固件。要让它变快，ELT 需要每次读取一整拍（8 个以上半精度值），在 90.5% 的 LUT 下还要再做 RTL。</li>
+      <li>Gemma 3 1B 的上下文只有 256 token（受 1 GB 地址空间限制），W8A8 的精度损失比 Qwen 明显（困惑度 +3–5%）。</li>
     </ul>
   </div>
 </section>
 
 </main>
-<footer><div class="wrap">TARS-mini · KV260（XCK26）· Vivado 2025.2 · 所有速度为板上实测，100 MHz 核心时钟。完整记录：<code>tars_mini_fpga/docs/project_history.md</code></div></footer>
+<footer><div class="wrap">TARS-mini · KV260（XCK26）· Vivado 2025.2 · 所有速度为板上实测，100 MHz 核心时钟。早期记录：<a href="project_history.md">project_history.md</a>；后续报告：<a href="profiling_v33/README.md">v3.3 分算子采集</a>、<a href="fp16_state_v34/README.md">FP16 状态</a>、<a href="gemma3_1b/README.md">Gemma 3 1B</a></div></footer>
 </body>
 </html>

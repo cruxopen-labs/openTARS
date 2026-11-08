@@ -56,6 +56,43 @@ Gemma 3 1B needed no RTL change, only the lowering, the export and the board run
 W8A8 against the FP32 model (teacher-forced): top-1 agreement 84-89%, perplexity +3-5% (English
 17.69 to 18.53, Chinese 46.42 to 48.91). `sudo ./run.sh gemma3` starts a chat at about 10 tokens/s.
 
+## Version history
+
+Hardware iterations, including simulation-only attempts marked below. Board measurements use a
+100 MHz core clock and greedy decoding; selftest logits match each export's golden model bit for bit.
+v1.0 to v3.2 were built between 2026-10-31 and 11-03. Decode is
+Qwen3.5-0.8B on a short context unless noted. The full
+story, with the problems met at each step, is in the [project log](docs/tars_kv260_history.html)
+(Chinese).
+
+| Version | Date | Main change | Decode / token | LUT |
+|---|---|---|---|---|
+| v1.0 | | first FPGA build: shared SFU, LUTRAM buffers, single-beat 16 B AXI bridge | 2.6 s (261 M cycles) | 85.8% |
+| v1.1 | | read bursts; reads wait only for overlapping writes; performance counters | 0.90 s | 86.1% |
+| v1.2 | | longer bursts and more reads in flight only (simulation, dropped) | - | - |
+| v1.3 | | 4-way interleaved burst collection + reorder buffer, 128 reads in flight, batched GEMV | 0.73 s | 87.5% |
+| v1.4 | | write bursts with byte merging | 0.60 s | - |
+| v2.0 | | 32 B read port, HP0 at 200 MHz, GEMV 32 B / cycle, PEs on DSPs | 0.36 s | 89.4% |
+| v3.0 | | 64 B read port over HP0 + HP3 at 250 MHz, GEMV 64 B / cycle, 4 rows at a time | 0.21 s | 90.8% |
+| v3.1 | | systolic array removed (simulation, merged into v3.2) | - | - |
+| v3.2 | 2026-11-03 | no array; 128 B read port over four HP ports; GEMV 128 B / cycle | 0.16 s (15.7 M) | 86.0% |
+| v3.2b | 2026-11-07 | FDOT passes overlap, Q kept on chip (VERSION register unchanged) | 1.05-1.10x faster; Qwen3-0.6B 1.40x at position 250 | 85.65% |
+| **v3.3** (current) | 2026-11-07 | FDOT at 16 products a cycle (4 lane banks, 128 B reads) | **0.13 s** (13.2 M); Qwen3-0.6B 0.07 s; Gemma 3 1B 0.09 s | 89.55% |
+| v3.3 + counters | 2026-11-08 | per-operator cycle counters (`PROFILE_CAP`), sampled logits identical (experimental) | first run 0.005-0.103% slower; one repeat 0.60% slower | 89.62% |
+| v3.4 | 2026-11-08 | optional packed FP16 DeltaNet state (experimental, not installed) | FP16 export 3% slower than FP32 on v3.4 | 90.50% |
+
+Model and software milestones on these bitstreams:
+
+| Date | Change |
+|---|---|
+| 2026-11-03 | Qwen3-0.6B: lowering, export and board runtime, no RTL change |
+| 2026-11-06 | Qwen3.5-0.8B: optional MTP speculative decoding (bit-identical; 0.97x on average, so off by default) |
+| 2026-11-08 | Gemma 3 1B (gemma-3-1b-it): lowering, export, BOS and chat template in the runtime, no RTL change |
+| 2026-11-08 | `run.sh` takes the model as its first argument; operator profiler (`run.sh profile`) |
+
+Experimental firmware and results are archived under `~/tars/firmware_v33_profile/`,
+`~/tars/firmware_v34/` and `~/tars/results/`; the linked reports use this consolidated layout.
+
 ## Speculative decoding (MTP)
 
 Qwen3.5-0.8B's checkpoint has a multi-token prediction head (one gated attention layer, 20 M

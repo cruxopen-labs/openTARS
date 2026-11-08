@@ -76,9 +76,9 @@ using FP64 metrics. Reported metrics include top-1 agreement, maximum absolute
 and relative-L2 error, mean KL and next-token NLL.
 
 On the board, `data_fp32_v34` is a fresh upload of this experiment's FP32 export.
-The existing `data_fp32` link points to the original deployment and is not used
-as the numerical baseline: despite matching short golden sequences, its image
-tail has a different hash. The original model directory remains unchanged.
+The original deployment in `data/` is not used as the numerical baseline:
+despite matching short golden sequences, its image tail has a different hash.
+The original model directory remains unchanged.
 Both fresh uploads passed every file's SHA-256 check on the board. Their
 inventories and completed regression logs are saved in [validation/](validation/).
 
@@ -158,8 +158,10 @@ A speed benefit would require ELT to consume a full packed beat per request
 After measurement the original firmware (SHA-256 `c40eb336…`, version 0x30300)
 was reinstalled and the production `/home/ubuntu/tars` self-test passed again
 ([validation/selftest_restored.log](validation/selftest_restored.log)).
-The v3.4 bit, both uploaded exports and raw results remain in
-`/home/ubuntu/tars_fp16_20261108`.
+After consolidating the board directories, the v3.4 bit is archived in
+`~/tars/firmware_v34/tars_kv260/`, the exports in `~/tars/data_fp16/` and
+`~/tars/data_fp32_v34/`, and raw results in `~/tars/results/fp16_v34/`.
+The default `run.sh` does not install this experimental firmware.
 
 The CPU golden-model 256-token comparison was stopped after one hour (one baseline
 sample done); the FPGA results above are backed by bit-exact board self-tests.
