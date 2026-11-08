@@ -78,12 +78,14 @@ class Machine:
         act, out, bias = C.act_of(e), e >> 2 & 3, e >> 4 & 1
         # HDR_RSV / GROUP_SIZE: conv geometry; v0.4: GEMM row-scale offset (QM_ROWCOL), ELT
         # broadcast modes and B stride, ROPE rows per position, FDOT B stride; 0 elsewhere
-        hdr_ok = conv or (op == C.OP_GEMM and qmode == C.QM_ROWCOL) or (op == C.OP_ELT and d["HDR_RSV"] < 8)
+        hdr_ok = conv or (op == C.OP_GEMM and qmode == C.QM_ROWCOL) \
+            or (op == C.OP_ELT and d["HDR_RSV"] < 16) \
+            or (op == C.OP_FDOT and c & 1 and d["HDR_RSV"] == C.STATE_FP16)
         grp_ok = conv or op in C.V04_OPS
         if d["CORE_ID"] != self.core_id or d["DEP_SIG"] or (d["HDR_RSV"] and not hdr_ok) \
                 or (d["GROUP_SIZE"] and not grp_ok):
             return C.E_FIELD, d
-        if c >> 13 or e >> 6 or out == 3:
+        if c >> 13 or e >> 6 or (out == C.OUT_FP16 and op != C.OP_ELT):
             return C.E_FIELD, d
         if out != C.OUT_INT8 and d["OUT_SCALE"]:
             return C.E_FIELD, d
@@ -119,7 +121,7 @@ class Machine:
         elif op == C.OP_ELT:                              # v0.4
             eop = c & 3
             if c >> 2 or d["K"] or d["SCALE_OFF"] or bias != (eop == C.ELT_MULADD) \
-                    or (eop == C.ELT_MULADD and out != C.OUT_FP32) or (not bias and d["BIAS_OFF"]):
+                    or (eop == C.ELT_MULADD and out not in (C.OUT_FP32, C.OUT_FP16)) or (not bias and d["BIAS_OFF"]):
                 return C.E_FIELD, d
         elif op == C.OP_ROPE:
             if c or act != C.ACT_NONE or bias or d["SCALE_OFF"] or d["BIAS_OFF"] or d["GROUP_SIZE"] == 0:
@@ -158,7 +160,7 @@ class Machine:
     def bstride(d: dict) -> tuple[int, int]:
         """v0.4 (ldb, B row bytes) of ELT (dense B) and FDOT; GROUP_SIZE = 0 means dense."""
         if d["OPCODE"] == C.OP_FDOT:
-            brow = 4 * (d["N"] if d["CTRL"] & 1 else d["K"])
+            brow = (2 if d["HDR_RSV"] & C.STATE_FP16 else 4) * (d["N"] if d["CTRL"] & 1 else d["K"])
         else:
             brow = 4 * d["N"] if (d["HDR_RSV"] & 3) == C.BM_DENSE else 0
         return (16 * d["GROUP_SIZE"] if d["GROUP_SIZE"] else brow), brow
@@ -169,7 +171,8 @@ class Machine:
         out = d["EPI"] >> 2 & 3
         op = d["OPCODE"]
         arow = d["K"] if op == C.OP_GEMM else C.conv_params(d)["Cin"] if op in C.CONV_OPS \
-            else 4 * d["K"] if op == C.OP_FDOT else 4 * d["N"]
+            else 4 * d["K"] if op == C.OP_FDOT else \
+            (2 if op == C.OP_ELT and d["HDR_RSV"] & C.STATE_FP16 else 4) * d["N"]
         yrow = d["N"] * C.ESIZE.get(out, 4)
         lda = 16 * d["LDA16"] if d["LDA16"] else arow
         ldy = 16 * d["LDY16"] if d["LDY16"] else yrow
@@ -189,7 +192,7 @@ class Machine:
         op = d["OPCODE"]
         if op in C.V04_OPS:
             reads = [strided(d["A_OFF"], lda, arow) if not (op == C.OP_ELT and d["HDR_RSV"] >> 2 & 1)
-                     else [(B + d["A_OFF"], B + d["A_OFF"] + 4 * N)]]
+                     else [(B + d["A_OFF"], B + d["A_OFF"] + arow)]]
             w0 = B + d["W_OFF"]
             if op == C.OP_ELT:
                 bm = d["HDR_RSV"] & 3
@@ -197,7 +200,7 @@ class Machine:
                 reads.append([(w0 + m * ldb, w0 + m * ldb + 4 * N) for m in range(M)] if bm == C.BM_DENSE
                              else [(w0, w0 + {C.BM_ROW: 4 * N, C.BM_COL: 4 * M, C.BM_SCALAR: 4}[bm])])
                 if d["CTRL"] & 3 == C.ELT_MULADD:
-                    reads.append(strided(d["BIAS_OFF"], ldy, 4 * N))
+                    reads.append(strided(d["BIAS_OFF"], ldy, yrow))
             elif op == C.OP_ROPE:
                 reads.append([(w0, w0 + 4 * K * ((M - 1) // d["GROUP_SIZE"] + 1))])
             else:
@@ -255,6 +258,8 @@ class Machine:
             return F.ftz(y).astype("<f4").tobytes()
         if out == C.OUT_BF16:
             return F.to_bf16_bits(y).astype("<u2").tobytes()
+        if out == C.OUT_FP16:
+            return F.to_fp16_bits(y).astype("<u2").tobytes()
         return F.q8(y, C.bits_f32(out_scale_bits)).tobytes()
 
     def _conv(self, d: dict) -> np.ndarray:
@@ -328,12 +333,19 @@ class Machine:
         return np.stack([np.frombuffer(self.read(addr + i * ld, 4 * n), "<f4")
                          for i in range(m)]).astype(F.F32)
 
+    def _rows_float(self, addr: int, ld: int, m: int, n: int, half: bool) -> np.ndarray:
+        if not half:
+            return self._rows_f32(addr, ld, m, n)
+        return np.stack([F.from_fp16_bits(np.frombuffer(self.read(addr + i * ld, 2 * n), "<u2"))
+                         for i in range(m)])
+
     def _elt(self, d: dict) -> np.ndarray:
         """y = act(A) op B (MUL, ADD, SUB = A + -B) or C + act(A) * B (MULADD), each rounded once;
         A and B broadcast per HDR_RSV."""
         B0, M, N, e = d["BASE_ADDR"], d["M"], d["N"], d["EPI"]
         lda, ldy = self.strides(d)[:2]
-        a = self._rows_f32(B0 + d["A_OFF"], 0 if d["HDR_RSV"] >> 2 & 1 else lda, M, N)
+        a = self._rows_float(B0 + d["A_OFF"], 0 if d["HDR_RSV"] >> 2 & 1 else lda, M, N,
+                             bool(d["HDR_RSV"] & C.STATE_FP16))
         bm = d["HDR_RSV"] & 3
         w0 = B0 + d["W_OFF"]
         if bm == C.BM_DENSE:
@@ -350,7 +362,7 @@ class Machine:
         elif eop == C.ELT_SUB:
             y = F.fadd(a, F._neg(F.ftz(b)))
         else:
-            c = self._rows_f32(B0 + d["BIAS_OFF"], ldy, M, N)
+            c = self._rows_float(B0 + d["BIAS_OFF"], ldy, M, N, e >> 2 & 3 == C.OUT_FP16)
             y = F.fadd(c, F.fmul(a, b))
         return self._convert(y, e >> 2 & 3, d["OUT_SCALE"])
 
@@ -365,7 +377,8 @@ class Machine:
         a = self._rows_f32(B0 + d["A_OFF"], self.strides(d)[0], M, K)
         ldb = self.bstride(d)[0]
         if d["CTRL"] & 1:
-            y = F.fdot_nn(a, self._rows_f32(B0 + d["W_OFF"], ldb, K, N))
+            y = F.fdot_nn(a, self._rows_float(B0 + d["W_OFF"], ldb, K, N,
+                                            bool(d["HDR_RSV"] & C.STATE_FP16)))
         else:
             y = F.fdot_nt(a, self._rows_f32(B0 + d["W_OFF"], ldb, N, K))
         return self._convert(y, d["EPI"] >> 2 & 3, d["OUT_SCALE"])
@@ -373,11 +386,13 @@ class Machine:
     @staticmethod
     def _in_place(d: dict, i: int) -> bool:
         """v0.4: an ELT input may be the output itself (same rows, fp32): read i is A (0) or C (2)."""
-        if d["OPCODE"] != C.OP_ELT or (d["EPI"] >> 2 & 3) != C.OUT_FP32:
+        out = d["EPI"] >> 2 & 3
+        if d["OPCODE"] != C.OP_ELT or out not in (C.OUT_FP32, C.OUT_FP16):
             return False
         lda, ldy = Machine.strides(d)[:2]
         if i == 0:
-            return not (d["HDR_RSV"] >> 2 & 1) and d["A_OFF"] == d["Y_OFF"] and lda == ldy
+            afmt = C.OUT_FP16 if d["HDR_RSV"] & C.STATE_FP16 else C.OUT_FP32
+            return afmt == out and not (d["HDR_RSV"] >> 2 & 1) and d["A_OFF"] == d["Y_OFF"] and lda == ldy
         return i == 2 and d["BIAS_OFF"] == d["Y_OFF"]
 
     # ------------------------------------------------------------------ the queue

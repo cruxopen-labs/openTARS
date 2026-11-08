@@ -1,4 +1,4 @@
-"""Chat with the exported model (Qwen3.5-0.8B or Qwen3-0.6B: data/manifest.json) on TARS-mini (KV260,
+"""Chat with the exported model (Qwen3.5-0.8B, Qwen3-0.6B or Gemma 3 1B: data/manifest.json) on TARS-mini (KV260,
 100 MHz), on the serial console.
 
     sudo python3 qwen_chat.py [--data ../data] [--max-new 128] [--raw]
@@ -56,15 +56,11 @@ def main() -> int:
             continue
         if first:
             m.new_conversation()
-        text = line if args.raw else m.m["chat_prefix"] + line + m.m["chat_suffix"]
-        if not args.raw and not first:          # a later turn: close the assistant's turn first
-            text = "<|im_end|>\n" + text
-        ids = tk.encode(text, add_special_tokens=False).ids
+        ids = m.encode(tk, line, chat=not args.raw)   # a later turn closes the model's turn first
         if m.pos + len(ids) + 1 >= m.T:
             print("(context full: new conversation)")
             m.new_conversation()
-            text = line if args.raw else m.m["chat_prefix"] + line + m.m["chat_suffix"]
-            ids = tk.encode(text, add_special_tokens=False).ids
+            ids = m.encode(tk, line, chat=not args.raw)
             if len(ids) + 1 >= m.T:
                 print("(message too long)")
                 continue

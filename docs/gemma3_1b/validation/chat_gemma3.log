@@ -1,0 +1,14 @@
+tars_kv260: loaded to slot 0
+bitstream loaded
+TARS-mini on KV260: loading gemma-3-1b-it ...
+
+  ready in 67 s (1008 MiB image, 256 positions, prefill chunks [4])
+ready. context 256 tokens. /reset = new conversation, /quit = exit
+
+you> tars> Tokyo is the capital of Japan.
+  [21 prompt tokens 1.0 s, 7 new tokens 0.7 s (10.21 tok/s), 28/256 context]
+you> tars> As of 2023, the population of Tokyo is approximately 14 million people.
+  [18 prompt tokens 0.9 s, 20 new tokens 2.0 s (9.93 tok/s), 66/256 context]
+you> tars> The Great Wall of China is a colossal fortification built over centuries to protect the Chinese Empire from invaders.
+  [17 prompt tokens 1.0 s, 20 new tokens 2.1 s (9.43 tok/s), 103/256 context]
+you> 

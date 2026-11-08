@@ -26,11 +26,13 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=3)
     ap.add_argument("--vocab", type=int, default=4096)
     ap.add_argument("--structural", action="store_true")
+    ap.add_argument("--state-dtype", choices=("fp32", "fp16"), default="fp32")
     args = ap.parse_args()
     assert rtlsim.FPGA and rtlsim.TOP == "kv260", "run with TM_FPGA=1 TM_TOP=kv260"
     cfg = Q.make_config(Q.CFG_08B, ["linear_attention", "full_attention"], vocab=args.vocab)
     w = Q.random_weights(cfg, embed=True)
-    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 26, head=True, queue_cap=4096)
+    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 26, head=True, queue_cap=4096,
+                         state_dtype=args.state_dtype)
     ddr = low.p.ddr
     rng = np.random.default_rng(5)
     tok = int(rng.integers(0, args.vocab))

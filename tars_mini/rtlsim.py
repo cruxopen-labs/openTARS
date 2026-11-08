@@ -122,7 +122,7 @@ def build(top: str, sources: list[Path], params: dict | None = None, extra: list
 
 # ---------------------------------------------------------------------- fp unit vectors
 FP_OPS = {"fmul": 0, "fadd": 1, "i2f": 2, "act": 3, "bf16": 4, "q8": 5, "exp": 6, "recip": 7,
-          "rsqrt": 8, "fadd3": 9, "fmul3": 10}
+          "rsqrt": 8, "fadd3": 9, "fmul3": 10, "fp16": 11, "from_fp16": 12}
 
 
 def run_fp(vectors: list[tuple[int, int, int]]) -> np.ndarray:

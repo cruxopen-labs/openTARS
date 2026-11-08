@@ -174,7 +174,7 @@ def _desc(**f):
 
 @pytest.mark.parametrize("fields,code", [
     (dict(OPCODE=C.OP_ELT, CTRL=4), C.E_FIELD),                                   # CTRL[2]
-    (dict(OPCODE=C.OP_ELT, HDR_RSV=8), C.E_FIELD),                                # mode bits beyond [2:0]
+    (dict(OPCODE=C.OP_ELT, HDR_RSV=16), C.E_FIELD),                               # beyond broadcast + FP16 A
     (dict(OPCODE=C.OP_ELT, CTRL=C.ELT_MULADD), C.E_FIELD),                        # MULADD without C
     (dict(OPCODE=C.OP_ELT, EPI=C.epi(bias=1), BIAS_OFF=0x400), C.E_FIELD),        # C without MULADD
     (dict(OPCODE=C.OP_ELT, CTRL=C.ELT_MULADD, EPI=C.epi(out=C.OUT_BF16, bias=1), BIAS_OFF=0x400), C.E_FIELD),
@@ -299,6 +299,73 @@ def test_qwen3_model_with_head_greedy_matches_transformers():
         assert int(np.argmax(r)) == ids[len(prompt) + i]
 
 
+@pytest.mark.parametrize("chunks", [[5, 1, 1, 1], [9, 1, 1]])
+def test_gemma3_model_with_head_greedy_matches_transformers(chunks):
+    """Gemma 3 (sliding and global layers with their own RoPE bases, four norms per layer, GeGLU,
+    the scaled embedding; small dims, intermediate 4608 so the down projection runs as two K
+    blocks; the KV260 build's GEMV-only rules): greedy decoding on the golden model; each layer's
+    update within 2e-5 and the logits within 1e-5 of transformers' Gemma3TextModel with the same
+    W8A8 linears and head, and the same tokens."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(dict(Q.CFG_G3_SMALL, intermediate_size=4608),
+                        ["sliding_attention", "full_attention", "sliding_attention"], vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 26, head=True, queue_cap=4096)
+    assert [d.k for d in low.lw[0]["down"]] == [2304, 2304]
+
+    def run(ddr, q, n):
+        m = Machine(ddr)
+        m.gemv_only = True
+        assert m.run_queue(q, n).done
+        return m.ddr
+    prompt = [5, 77, 901, 12, 3000, 2, 9, 40, 1][:chunks[0]]
+    ids, logits, _ = low.generate(run, prompt, len(chunks) - 1)
+    x = low.embed(ids[:-1])
+    assert np.array_equal(x[0], (w["embed_tokens.weight"][ids[0]] * np.float32(16.0)).astype(np.float32))
+    ref = Q.run_reference(cfg, w, x, [len(prompt)] + [1] * (len(chunks) - 1), fake_quant=True, head=True)
+    for i, (g, r) in enumerate(zip(logits, ref.logits)):
+        assert np.abs(g - r).max() <= 1e-5 * np.abs(r).max(), i
+        assert int(np.argmax(r)) == ids[len(prompt) + i]
+
+
+def test_gemma3_blocks_match_transformers():
+    """Gemma 3's layers vs transformers with the same W8A8 linears, chunks of several sizes (the
+    sliding and global RoPE tables at offsets): each layer's update within 2e-5 of the reference's."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_G3_SMALL, ["sliding_attention", "full_attention"])
+    w = Q.random_weights(cfg)
+    chunks = [7, 1, 3, 16]
+    T = sum(chunks)
+    x = Q.random_inputs(cfg, T)
+    low = L.QwenLowering(cfg, w, max_tokens=T, ddr_bytes=1 << 26)
+    low.input(x)
+    t0 = 0
+    for c in chunks:
+        low.chunk(t0, c)
+        t0 += c
+    ddr, q, n = low.prog.build()
+    m = Machine(bytearray(ddr))
+    assert m.run_queue(q, n).done
+    rq = Q.run_reference(cfg, w, x, chunks, fake_quant=True)
+    t0 = 0
+    for i, c in enumerate(chunks):
+        prev, prev_r = x[t0:t0 + c], x[t0:t0 + c]
+        for lay in (0, 1):
+            g = low.read_layer(m, lay, t0, c)
+            dg, dr = g - prev, rq.layer_out[i][lay] - prev_r
+            assert np.abs(dg - dr).max() <= 2e-5 * np.abs(dr).max(), (i, lay)
+            prev, prev_r = g, rq.layer_out[i][lay]
+        fin = low.read_final(m, t0, c)
+        assert np.abs(fin - rq.final[i]).max() <= 2e-5 * np.abs(rq.final[i]).max()
+        t0 += c
+
+
 @pytest.mark.parametrize("cfgname", ["CFG_Q3_SMALL"])
 def test_speculative_verify_bit_identical_to_plain_decode(cfgname):
     """Greedy speculative decoding on Qwen3: chunks of up to 4 tokens at any position, every row's
@@ -355,7 +422,8 @@ def test_speculative_verify_bit_identical_to_plain_decode(cfgname):
     assert out[:len(ids)] == ids and rejected >= 2
 
 
-def test_mtp_speculative_bit_identical_to_plain_decode():
+@pytest.mark.parametrize("state_dtype", ["fp32", "fp16"])
+def test_mtp_speculative_bit_identical_to_plain_decode(state_dtype):
     """Qwen3.5 (LA and FA layers) with the MTP head: greedy speculative decoding gives the tokens of
     plain decoding and, at every position it verified, the same logits bit for bit, through hits
     and misses alike (the oracle forces both: a miss must leave the DeltaNet state as it was)."""
@@ -365,7 +433,8 @@ def test_mtp_speculative_bit_identical_to_plain_decode():
     from tars_mini import qwen_ref as Q
     cfg = Q.make_config(Q.CFG_SMALL, Q.LAYERS_08B[:4], vocab=4096)
     w = {**Q.random_weights(cfg, embed=True), **Q.random_mtp(cfg)}
-    mk = lambda **k: L.QwenLowering(cfg, w, max_tokens=48, ddr_bytes=1 << 25, head=True, queue_cap=8192, **k)
+    mk = lambda **k: L.QwenLowering(cfg, w, max_tokens=48, ddr_bytes=1 << 25, head=True, queue_cap=8192,
+                                   state_dtype=state_dtype, **k)
 
     def run(ddr, q, n):
         m = Machine(ddr)

@@ -95,8 +95,12 @@ DT_BF16, DT_INT8, DT_INT4, DT_FP8 = 0, 1, 2, 3
 # reserved bit, so every v0.2 descriptor keeps its meaning)
 ACT_NONE, ACT_RELU, ACT_RELU6, ACT_GELU, ACT_SILU = 0, 1, 2, 3, 4
 ACT_SIGMOID, ACT_SOFTPLUS, ACT_EXP = 5, 6, 7        # v0.4: the 3-bit code is now fully used
-OUT_FP32, OUT_BF16, OUT_INT8 = 0, 1, 2
-ESIZE = {OUT_FP32: 4, OUT_BF16: 2, OUT_INT8: 1}
+OUT_FP32, OUT_BF16, OUT_INT8, OUT_FP16 = 0, 1, 2, 3
+ESIZE = {OUT_FP32: 4, OUT_BF16: 2, OUT_INT8: 1, OUT_FP16: 2}
+# v3.4 state storage: HDR_RSV[3] selects FP16 A for ELT, FP16 B for FDOT NN.
+# ELT MULADD C has the output's format; only ELT may use OUT_FP16.
+STATE_FP16 = 1 << 3
+FP16_MIN_VERSION = 0x00030400
 
 # ERR_CODE (CSR 0x803), in check order: the lowest failing check wins
 E_OK, E_MAGIC, E_VERSION, E_CRC, E_VALID, E_OPCODE, E_FIELD, E_ALIGN, E_RANGE = range(9)

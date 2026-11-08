@@ -1,5 +1,5 @@
-"""TARS-mini on the KV260: the device and the model runtime (Qwen3.5-0.8B or Qwen3-0.6B: whatever the
-export in data/ holds).
+"""TARS-mini on the KV260: the device and the model runtime (Qwen3.5-0.8B, Qwen3-0.6B or Gemma 3 1B:
+whatever the export in data/ holds).
 
 Device backends (same interface):
   Fpga    the board: registers through libtmdrv (/dev/mem), a 1 GB hugepage buffer as the core's
@@ -37,7 +37,7 @@ ERRORS = {0: "OK", 1: "E_MAGIC", 2: "E_VERSION", 3: "E_CRC", 4: "E_VALID", 5: "E
 
 
 class Fpga:
-    def __init__(self, lib: str | Path = HERE / "libtmdrv.so", hugepages: bool = True):
+    def __init__(self, lib: str | Path = HERE / "libtmdrv.so", hugepages: bool = True, profile: bool = False):
         if os.geteuid() != 0:
             raise PermissionError("run as root (sudo): /dev/mem and the physical addresses of the buffer")
         if not pl_loaded():                           # a read of an unprogrammed PL hangs the bus
@@ -73,6 +73,8 @@ class Fpga:
                               f"echo {npg + 16} > /proc/sys/vm/nr_hugepages)")
         self.ptr = ptr
         self.last_perf = None
+        self.profile_enabled = profile
+        self.profile_cap = L.tm_rd(0x05C) if profile else 0
         self.mem = np.ctypeslib.as_array((ctypes.c_uint8 * MEM).from_address(ptr))
         self.ppn = list(ppn)
         self.reset()
@@ -125,8 +127,11 @@ class Fpga:
             occ = L.tm_rd(0x054)
             occ |= L.tm_rd(0x058) << 32
             p["cycles"] = cyc
+            p["rd_occupancy"] = occ
             p["rd_latency"] = occ / max(p["rd_beats"], 1)      # mean, cycles (Little's law)
             self.last_perf = p
+            if self.profile_enabled and self.profile_cap == 0x50524601:
+                p["operators"] = [[L.tm_rd(0x100 + 16 * i + 4 * j) for j in range(4)] for i in range(10)]
         return st["done"], st["err"], L.tm_rd(R_OPIDX), cyc
 
 
@@ -172,6 +177,14 @@ def ensure_hugepages(n: int) -> None:
         if int(p.read_text()) < n:
             p.write_text(str(n))
         got = int(p.read_text())
+        if got < n:
+            # the page cache of a previous run's image (Gemma: ~1.6 GB) fragments memory: drop the
+            # clean cache, compact, and ask again
+            os.sync()
+            Path("/proc/sys/vm/drop_caches").write_text("3")
+            Path("/proc/sys/vm/compact_memory").write_text("1")
+            p.write_text(str(n))
+            got = int(p.read_text())
     except OSError as e:
         raise OSError(f"cannot set {p}: {e}")
     if got < n:
@@ -187,6 +200,10 @@ class Qwen:
     def __init__(self, dev, data: str | Path, log=print):
         self.dev, self.d = dev, Path(data)
         m = json.loads((self.d / "manifest.json").read_text())
+        minimum = max(m.get("min_firmware", 0), 0x30400 if m.get("state_dtype") == "fp16" else 0)
+        params = getattr(dev, "params", {})
+        if params.get("backend") != "golden model" and params.get("version", 0) < minimum:
+            raise RuntimeError(f"export requires firmware >= 0x{minimum:08x}; rebuild/load FP16-state firmware")
         self.m = m
         self.T, self.H, self.vocab = m["max_tokens"], m["hidden"], m["vocab"]
         t = time.time()
@@ -224,6 +241,10 @@ class Qwen:
                          {int(r): (int(o), int(k)) for r, o, k in index})
                      for n, index in m.get("spec", {}).items()}
         self.par, self.mrow, self.draft = 0, 0, None
+        s = m.get("embed_scale")
+        self.embed_scale = None if s is None else np.float32(s)
+        self.bos = [int(v) for v in m.get("bos_ids", [])]   # the conversation's first tokens (Gemma: <bos>)
+        self.turn_end = m.get("turn_end", "<|im_end|>\n")   # closes the model's turn before the next user turn
         log(f"  ready in {time.time() - t:.0f} s ({size >> 20} MiB image, {self.T} positions, "
             f"prefill chunks {sorted(self.chunks) or 'none'})")
         self.pos = 0
@@ -233,6 +254,16 @@ class Qwen:
         self.dev.to_dev(0, len(self.state0))
         self.pos, self.par, self.mrow, self.draft = 0, 0, 0, None
 
+    def encode(self, tk, text: str, chat: bool = True) -> list[int]:
+        """The token ids for `text` at the next position: with `chat` in the export's chat template
+        (a later turn first closes the model's turn), the BOS tokens at position 0."""
+        if chat:
+            text = self.m["chat_prefix"] + text + self.m["chat_suffix"]
+            if self.pos:
+                text = self.turn_end + text
+        ids = tk.encode(text, add_special_tokens=False).ids
+        return (self.bos if self.pos == 0 else []) + ids
+
     def _put(self, t: int, tokens) -> None:
         """The embeddings of `tokens` into the input rows t, t + 1, ..."""
         m, dev = self.m, self.dev
@@ -240,6 +271,8 @@ class Qwen:
             raise OverflowError(f"context full ({self.T} tokens)")
         for i, token in enumerate(tokens):
             x = (self.embed[token].astype(np.uint32) << 16).view(np.float32)   # bf16 -> fp32, exact
+            if self.embed_scale is not None:                # Gemma 3: times fp32(sqrt(hidden))
+                x = x * self.embed_scale
             a = m["x0_off"] + (t + i) * m["x0_ld"]
             dev.mem[a:a + 4 * self.H] = np.frombuffer(x.tobytes(), np.uint8)
             dev.to_dev(a, 4 * self.H)

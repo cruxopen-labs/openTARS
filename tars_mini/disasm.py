@@ -5,7 +5,7 @@ from . import contract as C
 
 _OPS = {C.OP_GEMM: "GEMM", C.OP_RELU: "RELU"}
 _ACT = {0: "none", 1: "relu", 2: "relu6", 3: "?"}
-_OUT = {0: "fp32", 1: "bf16", 2: "int8", 3: "?"}
+_OUT = {0: "fp32", 1: "bf16", 2: "int8", 3: "fp16"}
 _QM = {0: "none", 1: "tensor", 2: "channel", 3: "group", 4: "?", 5: "?", 6: "?", 7: "?"}
 
 

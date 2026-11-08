@@ -25,7 +25,7 @@ BITSTREAM = dict(VG=1, NB=4, OT=32, HB=256, OQ=32, LG=4, VQMIN=128)   # rtl/tm_k
 
 
 class RtlDev:
-    params = dict(backend="RTL (tb_kv260)")
+    params = dict(backend="RTL (tb_kv260)", version=0x30400)
 
     def __init__(self, work: Path):
         self.mem = np.zeros(B.MEM, np.uint8)

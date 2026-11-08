@@ -27,6 +27,8 @@ module tb_fp;
         8: r = rsqrt_f(a);
         9: r = fadd_st3(fadd_st2(fadd_st1(a, b)));
         10: r = fmul_st3(fmul_st2(fmul_st1(a, b)));
+        11: r = {16'b0, to_fp16(a)};
+        12: r = from_fp16(a[15:0]);
         default: r = 32'hDEADBEEF;
       endcase
       $fwrite(fo, "%08h\n", r);

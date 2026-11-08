@@ -48,7 +48,8 @@ module tm_xpu #(
   input  logic [1:0]   bmode,             // ELT B: dense, row vector, per row, scalar
   input  logic         arow,              // ELT A: one row for every m
   input  logic [2:0]   act,
-  input  logic [1:0]   out,               // 0 fp32, 1 bf16, 2 int8
+  input  logic [1:0]   out,               // 0 fp32, 1 bf16, 2 int8, 3 fp16 (ELT only)
+  input  logic         half_in,           // ELT A / FDOT NN B stored in packed binary16
   input  logic [31:0]  osc,
   input  logic [31:0]  m_n, n_n, k_n,     // M, N, K (ROPE: K = R)
   input  logic [31:0]  g_n,               // ROPE rows per position
@@ -101,9 +102,9 @@ module tm_xpu #(
   logic [31:0] es, cl, pl, act_l, act_e, lat_c;
   logic        long_act, sp_act;
   always_comb begin
-    esl      = (out == 2'd1) ? 2'd1 : (out == 2'd2) ? 2'd0 : 2'd2;
+    esl      = (out == 2'd0) ? 2'd2 : (out == 2'd2) ? 2'd0 : 2'd1;
     es       = 32'd1 << esl;
-    cl       = (out == 2'd0) ? 32'd0 : (out == 2'd1) ? 32'd1 : 32'd4;
+    cl       = (out == 2'd0) ? 32'd0 : (out == 2'd2) ? 32'd4 : 32'd1;
     long_act = act == 3'd3 || act == 3'd4 || act == 3'd5 || act == 3'd7;
     sp_act   = act == 3'd6;
     act_l    = long_act ? 32'd122 : sp_act ? 32'(tm_fp_pkg::SP_LAT) : 32'd1;
@@ -168,6 +169,9 @@ module tm_xpu #(
   logic [1:0]  i_bk;                      // ... into this lane bank
   logic [31:0] ia2 [12], ib2 [12];        // operands of products 4 .. 15
   logic        hfl;                       // NN, 16 products: the head beat's second 64 bytes are next
+  logic [1:0] hseg;                       // packed NN: four 16-half groups per 128-byte beat
+  logic       h_done, b_half, c_half;      // narrow read's upper 8 bytes contain the four values
+  logic [31:0] nn_end;
   logic        g_run, g_go, g_end, g_hf;  // NT, 16 products: a group runs; starts; its last step; which 64 bytes
   logic [1:0]  g_k;                       // the key
   logic [3:0]  g_c, aw_ra;                // the 128-byte beat of the row; the x buffer's entry read (a cycle ahead)
@@ -211,6 +215,8 @@ module tm_xpu #(
     fw_nt = FW && op == O_NT && k_n[4:0] == 5'd0 && k_n != 0 && k_n <= 32'd512 && (k_n >> 3) <= 32'(VQ) &&
             n_n[1:0] == 2'd0 && b_base[6:0] == 7'd0 && ldb[6:0] == 7'd0 && a_base[6:0] == 7'd0 && lda[6:0] == 7'd0;
     fw_nn = FW && op == O_NN && n_n[5:0] == 6'd0 && b_base[6:0] == 7'd0 && ldb[6:0] == 7'd0;
+    nn_end = fw_nn ? (half_in ? 32'd0 : 32'd1) : 32'd3;
+    h_done = half_in ? hseg == 2'd3 : hfl;
     nn_ab = !FX || rk[1:0] == 2'd0;
     rot   = (op == O_ROPE) && r_rot;
     gp    = r_lo ? rg + h4 : rg - h4;
@@ -227,7 +233,7 @@ module tm_xpu #(
     case (op)
       O_ELT: begin
         b_ws = (bmode == 2'd2) ? rb_row[3:2] : b_base[3:2];   // the B word, on every beat of the step
-        if (rs == 0) begin b_kind = K_A; b_addr = (arow ? a_base : ra_row) + {28'b0, rg, 4'b0}; end
+        if (rs == 0) begin b_kind = K_A; b_addr = (arow ? a_base : ra_row) + (64'(rg) << (half_in ? 3 : 4)); end
         else if (rs == 1) begin
           b_kind = K_B;
           case (bmode)
@@ -236,7 +242,7 @@ module tm_xpu #(
             2'd2: b_addr = {rb_row[63:4], 4'b0};      // rb_row = B + 4 m
             default: b_addr = {b_base[63:4], 4'b0};
           endcase
-        end else begin b_kind = K_C; b_addr = rc_row + {28'b0, rg, 4'b0}; end
+        end else begin b_kind = K_C; b_addr = rc_row + (64'(rg) << (out == 2'd3 ? 3 : 4)); end
       end
       O_ROPE: begin
         case (rs)
@@ -259,7 +265,8 @@ module tm_xpu #(
         if (rg == 0 && rs == 0 && nn_ab) begin b_kind = K_A; b_addr = ra_row + {28'b0, rk >> 2, 4'b0}; end
         else begin
           b_kind = K_B;
-          b_addr = fw_nn ? rb_k + {24'b0, rj, 8'b0} + {25'b0, rg, 7'b0} : rb_k + {26'b0, rj, 6'b0} + {28'b0, rg, 4'b0};
+          b_addr = fw_nn ? rb_k + (64'(rj) << (half_in ? 7 : 8)) + (64'(rg) << 7) :
+                   rb_k + (64'(rj) << (half_in ? 5 : 6)) + (64'(rg) << (half_in ? 3 : 4));
         end
       end
       O_GV: begin
@@ -295,9 +302,12 @@ module tm_xpu #(
     b_launch = (op == O_ELT) || (op == O_ROPE) || b_q1 || (op == O_GV && rg + 1 >= kgw);
     b_laddr = ry_row + 64'(ry_g);
     b_llen  = (op == O_GV) ? 8'(es) : 8'(es << 2);
-    b_pend  = (op == O_NT) ? !fw_nt && rg + 1 >= ngr : (op == O_NN) ? (rk + 1 >= k_n && rg == (fw_nn ? 32'd1 : 32'd3)) :
+    b_pend  = (op == O_NT) ? !fw_nt && rg + 1 >= ngr : (op == O_NN) ? (rk + 1 >= k_n && rg == nn_end) :
               (op == O_Q) && rj == 0 && rg + 1 >= ngr;
     b_wd    = (fw_nt || fw_nn) && b_kind == K_B;
+    b_half = b_addr[3];
+    if ((op == O_ELT && ((half_in && b_kind == K_A) || (out == 2'd3 && b_kind == K_C))) ||
+        (op == O_NN && half_in && b_kind == K_B && !fw_nn)) b_addr[3:0] = 4'd0;
     b_roaddr = (op == O_Q) ? rs_p : ry_row + 64'(ry_g);
     rd_go = cv && cnt < (LQ + 1)'(VQ);
     rq_go = rd_go;
@@ -308,7 +318,7 @@ module tm_xpu #(
   // tag FIFO beside the data FIFO; the head's entry (qd_h, qt_h) is what the consumer reads
   typedef struct packed {
     logic [2:0]  k;
-    logic        l, la, pe, fi, ro, ng, q1;
+    logic        l, la, pe, fi, ro, ng, q1, hs;
     logic [1:0]  lg, ws;
     logic [63:0] laddr, roaddr;
     logic [7:0]  llen;
@@ -317,7 +327,7 @@ module tm_xpu #(
   logic [127:0] qd_h;
   logic [128*RWH-1:0] qh_h;               // a wide W beat's upper 16 (RW - 1) bytes
   assign qt_w = '{k: c_kind, l: c_last, la: c_launch, pe: c_pend, fi: c_first, ro: c_rot, ng: c_neg,
-                 q1: c_q1, lg: c_lg, ws: c_ws, laddr: c_laddr, roaddr: c_roaddr, llen: c_llen};
+                 q1: c_q1, hs: c_half, lg: c_lg, ws: c_ws, laddr: c_laddr, roaddr: c_roaddr, llen: c_llen};
   logic [LQ-1:0] q_t, q_r, q_h;
   logic [LQ:0]  q_rcv;                    // returned and not popped
 `ifdef TM_FPGA
@@ -375,6 +385,9 @@ module tm_xpu #(
   logic [63:0]  ro_addr, ro_la;           // the next readout's address; the launched one's
 
   logic [127:0] hd;
+  logic [31:0] hd_value [4], wide_half [16];
+  logic [1023:0] hwide;
+  logic [255:0] hpart;
   logic [2:0]   hk;
   always_comb begin
     hd = qd_h;
@@ -384,7 +397,7 @@ module tm_xpu #(
     // a step fires on its last beat; the beat waits if the step cannot fire yet
     s_ok = SW == 0 || op != O_ELT || !(long_act || sp_act) || s_cnt == 0;
     fire = q_rcv != 0 && h_last && !c_wait && (!h_launch || (oq_free && gl_rem == '0)) && !ro_go && s_ok && !fw_nt;
-    pop  = q_rcv != 0 && !g_run && (!h_last || (fire && (!(fw_nn && hk == K_B) || hfl)));
+    pop  = q_rcv != 0 && !g_run && (!h_last || (fire && (!(fw_nn && hk == K_B) || h_done)));
     g_e  = LQ'(e_n);
     g_e3 = LQ'(e_n + (e_n << 1));
     g_go  = fw_nt && !g_run && !c_wait && q_rcv != 0 && hk == K_B && (LQ + 1)'(q_rcv) >= (LQ + 1)'(e_n << 2);
@@ -393,7 +406,15 @@ module tm_xpu #(
     hv = (hfl || (g_run && g_hf)) ? qh_h[895:384] : {qh_h[383:0], hd};
     av = g_hf ? gv_x[0][1023:512] : gv_x[0][511:0];
     aw_ra = (g_run && g_k == 2'd3 && g_hf) ? g_c + 4'd1 : g_c;
-    for (int i = 0; i < 4; i++) a_now[i] = (hk == K_A) ? hd[32 * i +: 32] : ca[i];
+    hwide = 1024'({qh_h, hd});
+    hpart = hwide[256 * hseg +: 256];
+    for (int i = 0; i < 16; i++) wide_half[i] = from_fp16(hpart[16 * i +: 16]);
+    for (int i = 0; i < 4; i++) begin
+      hd_value[i] = ((op == O_ELT && ((half_in && hk == K_A) || (out == 2'd3 && hk == K_C))) ||
+                     (op == O_NN && half_in && hk == K_B)) ?
+                    from_fp16(hd[64 * int'(qt_h.hs) + 16 * i +: 16]) : hd[32 * i +: 32];
+      a_now[i] = (hk == K_A) ? hd_value[i] : ca[i];
+    end
   end
 
   // ------------------------------------------------------------------ GEMV
@@ -622,7 +643,7 @@ module tm_xpu #(
   // (fp32 bits whatever the format); fp32 +0, bf16 +1, int8 +4 (q8 with osc, QUANT: inv)
   logic [31:0] cv_in [4], cv_osc, cv_yq [4], cv_raw4 [4], cv_in1 [4], cv_in4 [4];
   logic        cv_raw, raw1, raw4;
-  logic [15:0] cv_bf [4];
+  logic [15:0] cv_bf [4], cv_half [4];
   logic [7:0]  cv_q8 [4];
   logic [31:0] lsel [4];
   always_comb begin
@@ -640,6 +661,7 @@ module tm_xpu #(
   end
   for (genvar i = 0; i < 4; i++) begin : g_cv
     always_ff @(posedge clk) cv_bf[i] <= to_bf16(cv_in[i]);
+    always_ff @(posedge clk) cv_half[i] <= to_fp16(cv_in[i]);
     fpu_mul u_q (.clk, .a(cv_in[i]), .b(cv_osc), .y(cv_yq[i]));
     always_ff @(posedge clk) cv_q8[i] <= q8_tail(cv_yq[i]);
     fpu_dly #(32, 1) u_d1 (.clk, .d(cv_in[i]), .q(cv_in1[i]));
@@ -653,11 +675,11 @@ module tm_xpu #(
   always_comb begin
     for (int i = 0; i < 4; i++) begin
       cv_f[32 * i +: 32] = cv_in[i];
-      cv_b[16 * i +: 16] = cv_bf[i];
+      cv_b[16 * i +: 16] = out == 2'd3 ? cv_half[i] : cv_bf[i];
       cv_q[8 * i +: 8]   = cv_q8[i];
     end
     cv_row = (out == 2'd0) ? cv_f
-           : (out == 2'd1) ? (raw1 ? {96'b0, cv_in1[0]} : {64'b0, cv_b})
+           : (out != 2'd2) ? (raw1 ? {96'b0, cv_in1[0]} : {64'b0, cv_b})
            : (raw4 ? {96'b0, cv_in4[0]} : {96'b0, cv_q});
   end
   always_ff @(posedge clk) x_row <= (8 * RB)'(cv_row);
@@ -675,7 +697,7 @@ module tm_xpu #(
     if (rst) begin
       l_fb <= 2'd0; r_act <= 1'b0; cv <= 1'b0; cnt <= 0; q_t <= 0; q_r <= 0; q_h <= 0; q_rcv <= 0; c_wait <= 1'b0;
       ro_go <= 1'b0; i_acc <= 1'b0; i_launch <= 1'b0; f_v <= 1'b0;
-      lv <= '{default: 16'h0}; lane_p <= '{default: 3'b0}; g_run <= 1'b0; hfl <= 1'b0;
+      lv <= '{default: 16'h0}; lane_p <= '{default: 3'b0}; g_run <= 1'b0; hfl <= 1'b0; hseg <= 2'd0;
       gl_go <= 1'b0; gl_rem <= '0;
     end else begin
       // -------------------------------------------------------- reader
@@ -690,12 +712,12 @@ module tm_xpu #(
         cv <= 1'b1; c_addr <= b_addr; c_kind <= b_kind; c_last <= b_last && !(fw_nt && b_kind == K_A); c_launch <= b_launch && b_last;
         c_wide <= (gw && rj == 1 && b_kind == K_B) || b_wd;
         c_pend <= b_pend && b_last; c_first <= b_first; c_rot <= b_rot; c_neg <= b_neg; c_q1 <= b_q1;
-        c_lg <= b_lg; c_ws <= b_ws; c_laddr <= b_laddr; c_llen <= b_llen; c_roaddr <= b_roaddr;
+        c_lg <= b_lg; c_ws <= b_ws; c_laddr <= b_laddr; c_llen <= b_llen; c_roaddr <= b_roaddr; c_half <= b_half;
       end else if (rds) cv <= 1'b0;
       if (start) bk_v <= 1'b0;
       else if (wadv && op == O_ELT && b_kind == K_B) begin bk_v <= 1'b1; bk_a <= b_addr[63:4]; end
       if (start) begin
-        r_act <= m_n != 0; ra_ph <= 1'b0; hfl <= 1'b0; aw_w <= 7'd0;
+        r_act <= m_n != 0; ra_ph <= 1'b0; hfl <= 1'b0; hseg <= 2'd0; aw_w <= 7'd0;
         rm <= 0; rj <= 0; rk <= 0; rg <= 0; rs <= 0;
         ra_row <= a_base; rb_row <= b_base; rc_row <= c_base;
         ry_row <= y_base; ry_g <= 0; rb_n <= b_base; rb_k <= b_base; rtab <= b_base; rgc <= g_n;
@@ -760,7 +782,7 @@ module tm_xpu #(
               end
             end
             O_NN: begin
-              if (rg < (fw_nn ? 32'd1 : 32'd3)) rg <= rg + 1;
+              if (rg < nn_end) rg <= rg + 1;
               else begin
                 rg <= 0;
                 if (rk + 1 < k_n) begin rk <= rk + 1; rb_k <= rb_k + 64'(ldb); end
@@ -808,7 +830,7 @@ module tm_xpu #(
       if (pop || g_end) q_h <= q_h + LQ'(pop_n);
       if (pop && fw_nt && hk == K_A) aw_w <= aw_w + 7'd1;
       if (g_end) aw_w <= 7'd0;
-      if (fire && fw_nn && hk == K_B) hfl <= !hfl;
+      if (fire && fw_nn && hk == K_B) begin hfl <= !hfl; hseg <= hseg + 2'd1; end
       // NT, 16 products: a group's steps, one a cycle (key; second 64 bytes; next 128-byte beat)
       if (g_go) begin
         g_run <= 1'b1; g_a <= q_h; g_k <= 2'd0; g_hf <= 1'b0; g_c <= 4'd0; ro_addr <= qt_h.roaddr;
@@ -828,9 +850,9 @@ module tm_xpu #(
       if (pop) begin
         for (int i = 0; i < 4; i++) begin
           case (hk)
-            K_A:   ca[i] <= hd[32 * i +: 32];
-            K_B:   cb[i] <= hd[32 * i +: 32];
-            K_C:   cc[i] <= hd[32 * i +: 32];
+            K_A:   ca[i] <= hd_value[i];
+            K_B:   cb[i] <= hd_value[i];
+            K_C:   cc[i] <= hd_value[i];
             K_XP:  cxp[i] <= hd[32 * i +: 32];
             K_COS: ccos[i] <= hd[32 * i +: 32];
             default: csin[i] <= hd[32 * i +: 32];
@@ -879,12 +901,12 @@ module tm_xpu #(
       if (fire) begin
         for (int i = 0; i < 4; i++) begin
           logic [31:0] b_e;
-          b_e = (hk == K_B) ? hd[32 * i +: 32] : cb[i];
+          b_e = (hk == K_B) ? hd_value[i] : cb[i];
           ia[i] <= a_now[i];
           case (op)
             O_ELT: begin
               ib[i] <= (bmode[1]) ? (hk == K_B ? hd[32 * qt_h.ws +: 32] : cbw[32 * qt_h.ws +: 32]) : b_e;
-              ic[i] <= (hk == K_C) ? hd[32 * i +: 32] : cc[i];
+              ic[i] <= (hk == K_C) ? hd_value[i] : cc[i];
             end
             O_ROPE: begin
               ixp[i] <= cxp[i]; ics[i] <= ccos[i]; isn[i] <= (hk == K_SIN) ? hd[32 * i +: 32] : csin[i];
@@ -903,13 +925,15 @@ module tm_xpu #(
         i_acc <= op == O_NT || op == O_NN;
         i_launch <= h_launch; i_laddr <= qt_h.laddr; i_llen <= 32'(qt_h.llen);
         i_q0 <= op == O_Q && !qt_h.q1; i_qfi <= qt_h.fi;
-        if (qt_h.pe && (!fw_nn || hfl)) begin c_wait <= 1'b1; w_ph <= 3'd0; w_cnt <= 8'd0; ro_addr <= qt_h.roaddr; end
+        if (qt_h.pe && (!fw_nn || h_done)) begin c_wait <= 1'b1; w_ph <= 3'd0; w_cnt <= 8'd0; ro_addr <= qt_h.roaddr; end
         if (fw_nn) begin                    // A[m][k] on all 16, B's 64 bytes
           logic [31:0] aw1;
           aw1 = (qt_h.lg == 2'd0) ? ca[qt_h.ws] : nn_a;
-          i_w <= 1'b1; i_bk <= {qt_h.lg[0], hfl};
-          for (int i = 0; i < 4; i++) ib[i] <= hv[32 * i +: 32];
-          for (int i = 0; i < 12; i++) begin ia2[i] <= aw1; ib2[i] <= hv[32 * (i + 4) +: 32]; end
+          i_w <= 1'b1; i_bk <= half_in ? hseg : {qt_h.lg[0], hfl};
+          for (int i = 0; i < 4; i++) ib[i] <= half_in ? wide_half[i] : hv[32 * i +: 32];
+          for (int i = 0; i < 12; i++) begin
+            ia2[i] <= aw1; ib2[i] <= half_in ? wide_half[i + 4] : hv[32 * (i + 4) +: 32];
+          end
         end
       end
       if (g_run) begin

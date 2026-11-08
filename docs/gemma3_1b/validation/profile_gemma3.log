@@ -1,0 +1,33 @@
+tars_kv260: loaded to slot 0
+bitstream loaded
+WARNING: old firmware; aggregate traffic only, no operator attribution.
+
+  ready in 1 s (1008 MiB image, 256 positions, prefill chunks [4])
+
+prefill 17 tokens: 683.888 core ms, read 7.842 GB/s, write 0.506 GB/s
+  aggregate only: rebuild/load RTL with PROFILE_CAP=0x50524601
+  reached position 0
+
+decode t=16: 93.855 core ms, read 11.101 GB/s, write 0.280 GB/s
+  aggregate only: rebuild/load RTL with PROFILE_CAP=0x50524601
+  reached position 32
+
+decode t=64: 95.867 core ms, read 10.982 GB/s, write 0.275 GB/s
+  aggregate only: rebuild/load RTL with PROFILE_CAP=0x50524601
+  reached position 64
+  reached position 96
+
+decode t=128: 98.450 core ms, read 10.841 GB/s, write 0.269 GB/s
+  aggregate only: rebuild/load RTL with PROFILE_CAP=0x50524601
+  reached position 128
+  reached position 160
+
+decode t=192: 101.009 core ms, read 10.711 GB/s, write 0.263 GB/s
+  aggregate only: rebuild/load RTL with PROFILE_CAP=0x50524601
+  reached position 192
+  reached position 224
+
+decode t=250: 103.366 core ms, read 10.571 GB/s, write 0.257 GB/s
+  aggregate only: rebuild/load RTL with PROFILE_CAP=0x50524601
+
+Saved profile_gemma3.json

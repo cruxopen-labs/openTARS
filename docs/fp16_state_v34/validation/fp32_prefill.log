@@ -1,0 +1,17 @@
+  loading weights 64 / 887 MiB  loading weights 128 / 887 MiB  loading weights 192 / 887 MiB  loading weights 256 / 887 MiB  loading weights 320 / 887 MiB  loading weights 384 / 887 MiB  loading weights 448 / 887 MiB  loading weights 512 / 887 MiB  loading weights 576 / 887 MiB  loading weights 640 / 887 MiB  loading weights 704 / 887 MiB  loading weights 768 / 887 MiB  loading weights 832 / 887 MiB  loading weights 887 / 887 MiB
+  ready in 1 s (887 MiB image, 256 positions, prefill chunks [4])
+
+prefill 20 tokens: 1785.851 core ms, read 4.085 GB/s, write 0.639 GB/s
+  operator       cycles       %       ms   rd_wait%   wr_wait%   hazard%
+  overhead      9476038    5.31   94.760       0.00       0.00      0.00
+  gemv         47676195   26.70  476.762       0.00      37.72      0.00
+  elt          95960592   53.73  959.606       0.00       0.00      0.00
+  fdot_nt        449614    0.25    4.496       0.00       0.00      0.00
+  fdot_nn      14818276    8.30  148.183       1.10       0.00      0.00
+  rope           144159    0.08    1.442       0.82       0.00      0.00
+  quant         2008289    1.12   20.083       0.00       0.00      0.00
+  norm          5448756    3.05   54.488       0.00       0.00      0.00
+  softmax        212501    0.12    2.125       0.00       0.00      0.00
+  act           2390666    1.34   23.907       0.00       0.00      0.00
+
+Saved results/fp32_prefill.json

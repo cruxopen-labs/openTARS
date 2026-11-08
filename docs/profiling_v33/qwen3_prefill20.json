@@ -1,0 +1,221 @@
+{
+  "schema": 1,
+  "model": "Qwen3-0.6B",
+  "firmware": {
+    "R": 8,
+    "C": 2,
+    "VG": 1,
+    "page_bits": 21,
+    "mem_mb": 1024,
+    "version": 197376
+  },
+  "profile_cap": 1347569153,
+  "mhz": 100.0,
+  "ddr_reference_GBs": 12.79,
+  "notes": [
+    "Queues are not split; counters are read only after halt and bridge idle.",
+    "Wait counters overlap and must not be added or treated as compute-idle time.",
+    "Traffic/core-busy time is not an instantaneous DDR or arithmetic utilization.",
+    "Write bytes count 32-byte bus beats, including masked bytes.",
+    "Host time includes counter reads, workload decoding and hashing.",
+    "golden_verified=null means no independent expected logits at that position."
+  ],
+  "samples": [
+    {
+      "cycles": 57723511,
+      "core_ms": 577.2351100000001,
+      "queues": 5,
+      "traffic": {
+        "read_bytes": 3424739968,
+        "write_bus_bytes": 285307296,
+        "read_GBs": 5.933007034170183,
+        "write_GBs": 0.49426531937740237,
+        "read_pct_of_reference": 46.38785796849244
+      },
+      "counters": {
+        "rd_beats": 26755781,
+        "wr_beats": 8915853,
+        "bursts": 5078922,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 13933978,
+        "rd_wait": 1105753
+      },
+      "waits_pct": {
+        "rd_wait": 1.9156024656920123,
+        "wr_wait": 24.139172684766177,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 68.28360861527459,
+      "descriptors": 9550,
+      "operator_counters_available": true,
+      "operators": [
+        {
+          "cycles": 2285601,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "overhead",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 3.9595668392381747,
+          "ms": 22.85601,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 37962387,
+          "rd_wait": 0,
+          "wr_wait": 13933978,
+          "rd_hazard": 0,
+          "name": "gemv",
+          "descriptors": 1000,
+          "macs": 9585950720,
+          "pct": 65.76590083025269,
+          "ms": 379.62387,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 36.7046940436069,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 1944204,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "elt",
+          "descriptors": 420,
+          "macs": 0,
+          "pct": 3.3681319211508116,
+          "ms": 19.44204,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 2592625,
+          "rd_wait": 4344,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nt",
+          "descriptors": 2240,
+          "macs": 22020096,
+          "pct": 4.491454097447399,
+          "ms": 25.92625,
+          "waits_pct": {
+            "rd_wait": 0.1675521913118943,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 2561241,
+          "rd_wait": 1076014,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nn",
+          "descriptors": 2240,
+          "macs": 22020096,
+          "pct": 4.437084570271549,
+          "ms": 25.61241,
+          "waits_pct": {
+            "rd_wait": 42.01143117730819,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 1831426,
+          "rd_wait": 25395,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "rope",
+          "descriptors": 280,
+          "macs": 0,
+          "pct": 3.1727557251325202,
+          "ms": 18.31426,
+          "waits_pct": {
+            "rd_wait": 1.386624411797146,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 2197899,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "quant",
+          "descriptors": 565,
+          "macs": 0,
+          "pct": 3.807632214194317,
+          "ms": 21.97899,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 4379184,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "norm",
+          "descriptors": 565,
+          "macs": 0,
+          "pct": 7.586482395362264,
+          "ms": 43.79184,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 1968944,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "softmax",
+          "descriptors": 2240,
+          "macs": 0,
+          "pct": 3.4109914069502807,
+          "ms": 19.68944,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 0,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "act",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 0.0,
+          "ms": 0.0,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        }
+      ],
+      "label": "prefill 20 tokens",
+      "logits_sha256": "ed04f9001ff41e78c322745a1c5fa2faaf125850ecf57124cb699f73802ffd85",
+      "golden_verified": true,
+      "host_ms": 686.6371869982686
+    }
+  ]
+}

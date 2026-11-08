@@ -11,6 +11,18 @@ import numpy as np
 F32 = np.float32
 
 
+def to_fp16_bits(x) -> np.ndarray:
+    """IEEE binary16 storage, RNE, gradual underflow, signed zero, canonical NaN."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        h = np.asarray(x, F32).astype("<f2")
+    return np.where(np.isnan(h), np.uint16(0x7E00), h.view(np.uint16)).astype(np.uint16)
+
+
+def from_fp16_bits(x) -> np.ndarray:
+    """Exact expansion to FP32, including binary16 subnormals; canonicalize NaNs."""
+    return canon(np.asarray(x, dtype=np.uint16).view(np.float16).astype(F32))
+
+
 def ftz(x) -> np.ndarray:
     """Denormals become a zero of the same sign."""
     x = np.asarray(x, dtype=F32)

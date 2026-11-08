@@ -44,6 +44,10 @@
 | `sw/qwen_chat.py` | 串口对话 demo |
 | `sw/selftest.py` | 上板自检（硬件通路 + 模型逐比特比对） |
 | `data/` | `image.bin`（887 MiB：权重+状态）、`embed_bf16.bin`、`queues.bin`、`manifest.json`、`tokenizer.json`、`expected.json`、`selftest/` |
+| `data_mtp/`、`data_qwen3/`、`data_gemma3/` | 其他模型的导出，结构同 `data/`（用 `run.sh <模型>` 选择） |
+| `data_fp16/`、`data_fp32_v34/`、`firmware_v34/` | FP16 状态实验（需要 v3.4 固件，`run.sh` 不加载，仅存档） |
+| `firmware_v33_profile/` | 带分算子计数器的 v3.3 实验比特流（仅存档） |
+| `results/` | 板上测量记录：`gemma3/`、`fp16_v34/`、`profile_v33/` |
 | `wheels/` | aarch64 的 numpy / tokenizers 离线安装包（板上不需要联网） |
 | `setup.sh` / `run.sh` | 一次性安装 / 启动 |
 
@@ -63,6 +67,20 @@ sudo ./setup.sh           # 一次即可：解压 Python 包到 pylib/、安装�
 sudo ./run.sh selftest    # 自检（约 2-3 分钟，见下）
 sudo ./run.sh             # 串口对话
 ```
+
+### 选择模型
+
+`sudo ./run.sh [模型] [命令] [参数]`，模型省略时为 Qwen3.5-0.8B，命令省略时为 `chat`：
+
+| 模型参数 | 数据目录 | 说明 |
+|---|---|---|
+| `qwen3.5`（默认） | `data/` | Qwen3.5-0.8B |
+| `qwen3.5-mtp` | `data_mtp/` | Qwen3.5-0.8B + MTP 头（`chat --spec`、`bench`） |
+| `qwen3` | `data_qwen3/` | Qwen3-0.6B |
+| `gemma3` | `data_gemma3/` | Gemma 3 1B（gemma-3-1b-it） |
+
+例如 `sudo ./run.sh gemma3`（Gemma 对话）、`sudo ./run.sh qwen3 selftest`、`sudo ./run.sh gemma3 profile --out p.json`。
+四个模型共用同一个固件（`firmware/`，v3.3）。`sudo ./run.sh --help` 列出全部参数。
 
 `run.sh` 每次都会 `xmutil unloadapp && xmutil loadapp tars_kv260` 重新加载比特流（失败时退回
 `fpgautil`）。**不要在没加载比特流时访问 0xA0000000**，否则总线会挂死。
@@ -88,6 +106,66 @@ tars> ……（逐 token 输出）
 
 `/reset` 开始新对话，`/quit` 退出；上下文 256 token，满了自动开新对话。`sudo ./run.sh chat --raw`
 不套聊天模板（纯续写）；`--max-new N` 限制每轮生成长度。
+
+## Gemma 3 1B（可选，Qwen 仍为默认）
+
+固件不变（v3.3）。导出到 `data_gemma3/`，和其他模型放在同一个上板目录里，`run.sh` 第一个参数选模型：
+
+```bash
+python3 tools/export_kv260.py --ckpt ~/models/gemma-3-1b-it --T 256 --out deploy/kv260/data_gemma3
+sudo ./run.sh gemma3 selftest
+sudo ./run.sh gemma3 chat
+```
+
+实板：自检 ALL PASS（逐比特一致），decode 约 94–103 ms/token，对话约 9.5–10 token/s；上下文 256 token
+（1 GB 内存余约 16 MiB）。映射方式、精度和限制见 [`Gemma 3 1B 报告`](../../docs/gemma3_1b/README.md)。
+
+## 分算子性能采集
+
+### FP16 状态（v3.4）
+
+可选（默认关闭）：`--state-dtype fp16` 将 Qwen3.5 的 DeltaNet 状态 `S` 以 packed IEEE FP16
+存储，衰减和更新写回时舍入；读回后乘法、累加、归一化及 SFU 均保持 FP32。权重、KV cache、
+卷积历史和临时向量不变。导出工具和 `QwenLowering` 的默认值都是 `fp32`：
+在 KV260 上实测 FP16 状态比 FP32 慢约 3%，且约 10% 位置的 top-1 改变。
+
+```bash
+python3 tools/export_kv260.py --ckpt ~/models/Qwen3.5-0.8B \
+    --state-dtype fp16 --out build/data_fp16
+# 同 checkpoint 的旧精度基线，独立目录，不覆盖原数据：
+python3 tools/export_kv260.py --ckpt ~/models/Qwen3.5-0.8B \
+    --state-dtype fp32 --out build/data_fp32
+python3 tools/check_state_precision.py --fp32 build/data_fp32 --fp16 build/data_fp16 \
+    --tokens 128 --out build/state_precision.json
+```
+
+CPU golden 比较较慢。两份数据上传后，也可在板上运行：
+
+```bash
+sudo ./run.sh precision --fp32 data_fp32 --fp16 data_fp16 \
+    --tokens 256 --out precision.json
+```
+
+脚本先完成全部 FP32 基线采样，再加载 FP16，
+不会把同一 FPGA 缓冲误当成两台独立设备；临时 logits 文件会自动清理。
+
+必须重新构建并安装 v3.4 固件及重新导出数据、golden logits；仅替换 Python 无效。
+manifest 标记最低版本，旧固件会被运行时提前拒绝。Qwen3 没有 DeltaNet 状态，
+不受此精度选项影响。精度比较是对当前 W8A8/FP32 状态基线的增量检查，
+不是通用模型质量保证；容量减半也不等于执行时间减半。
+已观察到部分 greedy 输出改变，不能视为无损转换。实现范围、验证进度和实测报告见
+[`FP16 状态报告`](../../docs/fp16_state_v34/README.md)。
+
+### 采集命令
+
+`sudo ./run.sh profile --data data --positions 16,64,128,192,250 --out profile.json`
+保持完整队列运行，输出总读写流量和等待计数；旧 v3.3 固件只支持这些总计数。
+重新构建当前 RTL 后，`PROFILE_CAP`（0x05c）为 `0x50524601`，可额外采集
+GEMV、ELT、FDOT NT/NN、RoPE、QUANT、Norm、Softmax、ACT 及取指/校验开销。
+加 `--require-operators` 可拒绝旧固件。`--mode prefill --check chat` 采集默认分块 prefill。
+等待计数相互重叠，不可相加；分类周期之和必须等于核心周期。
+完整的构建、计数口径、验证限制和 FP16 收益判断见
+[`docs/kv260_profiling.md`](../../docs/kv260_profiling.md)。
 
 ## 原理（板上软件做什么）
 

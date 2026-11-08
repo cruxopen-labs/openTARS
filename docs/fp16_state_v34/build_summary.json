@@ -1,0 +1,21 @@
+{
+  "firmware_version": "0x00030400",
+  "tool": "Vivado 2025.2",
+  "device": "xck26-sfvc784-2LV-c",
+  "core_mhz": 100,
+  "hp_mhz": 250,
+  "wns_ns": 0.008,
+  "whs_ns": 0.010,
+  "timing_constraints_met": true,
+  "bus_skew_constraints": 19,
+  "bus_skew_constraints_met": 19,
+  "bus_skew_min_slack_ns": 2.676,
+  "lut": {"used": 105992, "available": 117120, "percent": 90.50},
+  "registers": {"used": 59170, "available": 234240, "percent": 25.26},
+  "bram_tiles": {"used": 118, "available": 144, "percent": 81.94},
+  "dsp": {"used": 902, "available": 1248, "percent": 72.28},
+  "methodology_warning": "TIMING-9 Unknown CDC Logic: 1; also present in v3.3",
+  "bit_bin_sha256": "d8613d90d5084d2ada2b54bcf5c3c5db667e6e3725184ea900f2012fa94e68cc",
+  "original_bit_bin_sha256": "c40eb3365d641bcf831a8351429ccebfaa4dcd36e2e4847376074497f9dcebaa",
+  "local_artifacts": "build/fp16_v34_artifacts"
+}

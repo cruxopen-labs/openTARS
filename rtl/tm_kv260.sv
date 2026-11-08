@@ -22,7 +22,7 @@
 // says halted and idle.
 //
 // Registers (byte offsets, 32 bits):
-//   0x000 ID        "TARS" (0x54415253)          0x004 VERSION  0x00030300
+//   0x000 ID        "TARS" (0x54415253)          0x004 VERSION  0x00030400
 //   0x008 CTRL      [0] start (write 1: a pulse)  [1] core reset (level, 1 = held in reset)
 //   0x00C STATUS    [0] halted [1] done [7:4] err_code [8] bridge idle [9] read error (sticky)
 //                   [10] write error (sticky) [11] core in reset
@@ -37,6 +37,11 @@
 //   queue) 0x04C WR_WAIT (cycles the core's write waits) 0x050 RD_WAIT (cycles the core's read
 //   waits, any reason) 0x054 RD_OCC_LO 0x058 RD_OCC_HI (sum over cycles of the read beats in
 //   flight: / RD_BEATS = the mean read latency in cycles; read LO first)
+//   0x05C PROFILE_CAP = 0x50524601 if PROFILE enabled, otherwise 0.
+//   0x100 + 16*class + 4*metric: 10 classes, 32-bit counters since core reset.
+//   Classes: overhead, GEMV, ELT, FDOT_NT, FDOT_NN, ROPE, QUANT, NORM, SOFTMAX, ACT.
+//   Metrics: busy cycles, read-request wait, write-request wait, read/write hazard.
+//   Waits overlap; they are observations during a class, not disjoint stall reasons.
 //   0x2000 + 4 i    page table entry i: physical page number (physical address >> PAGE_BITS)
 module tm_kv260_top #(
   parameter int     R         = 8,
@@ -49,6 +54,7 @@ module tm_kv260_top #(
   parameter int     LG        = 4,
   parameter int     VQMIN     = 32,
   parameter int     GB        = 4,               // GEMV rows (with 128-byte W beats: 4 x 128 INT8 MACs a cycle)
+  parameter bit     PROFILE   = 1,               // observational counters; disable for area comparison
   parameter longint MEM_BYTES = 64'h4000_0000,   // 1 GB
   parameter int     PAGE_BITS = 21,              // 2 MB pages
   parameter int     NPT       = 512,             // page table entries (MEM_BYTES >> PAGE_BITS)
@@ -182,6 +188,8 @@ module tm_kv260_top #(
   logic [63:0] cycles;
   logic        br_idle;
   logic        core_rst;
+  logic [3:0]  profile_class;
+  logic [31:0] profile_count [10][4];
   assign core_rst = !rstn || ctl_rst;
 
   // the page table: written here, read by the read and the write address paths
@@ -237,7 +245,7 @@ module tm_kv260_top #(
         s_axil_rvalid <= 1'b1;
         case ({s_axil_araddr[13:2], 2'b00})
           14'h000: s_axil_rdata <= 32'h5441_5253;
-          14'h004: s_axil_rdata <= 32'h0003_0300;
+          14'h004: s_axil_rdata <= 32'h0003_0400;
           14'h008: s_axil_rdata <= {30'b0, ctl_rst, 1'b0};
           14'h00C: s_axil_rdata <= {20'b0, core_rst, err_w, err_r, br_idle, err_code, 2'b0, done, halted};
           14'h010: s_axil_rdata <= op_idx;
@@ -257,7 +265,12 @@ module tm_kv260_top #(
           14'h050: s_axil_rdata <= p_rw;
           14'h054: begin s_axil_rdata <= p_lat[31:0]; lat_hi_snap <= 32'(p_lat[47:32]); end
           14'h058: s_axil_rdata <= lat_hi_snap;
-          default: s_axil_rdata <= 32'h0;
+          14'h05C: s_axil_rdata <= PROFILE ? 32'h5052_4601 : 32'd0;
+          default: begin
+            if (PROFILE && s_axil_araddr[13:8] == 6'h01 && s_axil_araddr[7:4] < 4'd10)
+              s_axil_rdata <= profile_count[s_axil_araddr[7:4]][s_axil_araddr[3:2]];
+            else s_axil_rdata <= 32'h0;
+          end
         endcase
       end
     end
@@ -274,7 +287,7 @@ module tm_kv260_top #(
   logic [15:0]   mw_strb;
   tm_core #(.R(R), .C(C), .MEM_BYTES(MEM_BYTES), .NB(NB), .OT(OT), .HB(HB), .VG(VG), .LG(LG), .OQ(OQ),
             .VQMIN(VQMIN), .GB(GB), .RW(8), .ARR(0)) u_core (
-    .clk, .rst(core_rst), .start(start_p), .q_addr, .q_len, .halted, .done, .err_code, .op_idx, .cycles,
+    .clk, .rst(core_rst), .start(start_p), .q_addr, .q_len, .halted, .done, .err_code, .op_idx, .cycles, .profile_class,
     .mr_req, .mr_addr, .mr_wide, .mr_ready, .mr_rvalid, .mr_rdata, .mr_rhi,
     .mw_req, .mw_addr, .mw_data, .mw_strb, .mw_ready);
 
@@ -690,6 +703,22 @@ module tm_kv260_top #(
   end
 
   // performance counters (since the last core reset)
+  for (genvar i = 0; i < 10; i++) begin : g_profile
+    if (PROFILE) begin : g_enabled
+      always_ff @(posedge clk) begin
+        if (core_rst) begin
+          for (int j = 0; j < 4; j++) profile_count[i][j] <= '0;
+        end else if (profile_class == 4'(i)) begin
+          profile_count[i][0] <= profile_count[i][0] + 32'd1;
+          profile_count[i][1] <= profile_count[i][1] + 32'(mr_req && !mr_ready);
+          profile_count[i][2] <= profile_count[i][2] + 32'(mw_req && !mw_ready);
+          profile_count[i][3] <= profile_count[i][3] + 32'(in_v && in_haz);
+        end
+      end
+    end else begin : g_disabled
+      for (genvar j = 0; j < 4; j++) assign profile_count[i][j] = 32'd0;
+    end
+  end
   always_ff @(posedge clk) begin
     if (core_rst) begin
       rd_beats <= '0; wr_beats <= '0; p_bursts <= '0; p_haz <= '0; p_arw <= '0; p_ww <= '0;

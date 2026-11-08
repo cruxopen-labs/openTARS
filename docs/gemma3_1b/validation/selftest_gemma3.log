@@ -1,0 +1,58 @@
+tars_kv260: loaded to slot 0
+bitstream loaded
+TARS-mini: {'R': 8, 'C': 2, 'VG': 1, 'page_bits': 21, 'mem_mb': 1024, 'version': 197376}
+1. hardware path (random programs vs the golden model)
+  case0   status ok  (False, E_VERSION, op 1) memory ok  2376 cycles
+  case1   status ok  (True, OK, op 8) memory ok  21442 cycles
+  case2   status ok  (True, OK, op 8) memory ok  13742 cycles
+  case3   status ok  (False, E_CRC, op 7) memory ok  13644 cycles
+  case4   status ok  (False, E_ALIGN, op 7) memory ok  8505 cycles
+  case5   status ok  (False, E_FIELD, op 3) memory ok  11181 cycles
+  case6   status ok  (False, E_FIELD, op 1) memory ok  6182 cycles
+  case7   status ok  (True, OK, op 8) memory ok  17708 cycles
+  case8   status ok  (True, OK, op 8) memory ok  16727 cycles
+  case9   status ok  (False, E_FIELD, op 1) memory ok  1316 cycles
+  case10  status ok  (False, E_FIELD, op 0) memory ok  204 cycles
+  case11  status ok  (True, OK, op 8) memory ok  16452 cycles
+  case12  status ok  (False, E_CRC, op 0) memory ok  204 cycles
+  case13  status ok  (True, OK, op 8) memory ok  13831 cycles
+  case14  status ok  (True, OK, op 8) memory ok  15173 cycles
+  case15  status ok  (True, OK, op 8) memory ok  18538 cycles
+  case16  status ok  (False, E_CRC, op 0) memory ok  204 cycles
+  case17  status ok  (True, OK, op 8) memory ok  18371 cycles
+  case18  status ok  (True, OK, op 8) memory ok  10707 cycles
+  case19  status ok  (True, OK, op 8) memory ok  13593 cycles
+  case20  status ok  (False, E_OPCODE, op 0) memory ok  236 cycles
+  case21  status ok  (False, E_OPCODE, op 7) memory ok  10510 cycles
+  case22  status ok  (True, OK, op 8) memory ok  9706 cycles
+  case23  status ok  (False, E_CRC, op 4) memory ok  7216 cycles
+   PASS
+2. gemma-3-1b-it (logits vs the golden model, bit for bit)
+
+  ready in 9 s (1008 MiB image, 256 positions, prefill chunks [4])
+  plain prompt (6 tokens, chunked prefill): ->   9079 bit-exact  0.33 s at 100 MHz
+  plain pos   6: token   9079: -> 236761 bit-exact  0.09 s at 100 MHz
+  plain pos   7: token 236761: ->    108 bit-exact  0.09 s at 100 MHz
+  plain pos   8: token    108: ->    818 bit-exact  0.09 s at 100 MHz
+  plain pos   9: token    818: ->   7488 bit-exact  0.09 s at 100 MHz
+  plain pos  10: token   7488: ->   3207 bit-exact  0.09 s at 100 MHz
+  plain pos  11: token   3207: ->    528 bit-exact  0.09 s at 100 MHz
+  plain pos  12: token    528: ->   7001 bit-exact  0.09 s at 100 MHz
+  plain: 13 positions in 1.3 s; expected output ' Paris.\n\nThe largest city in France'
+  last step: rd_beats 8111588, wr_beats 821452, bursts 1220612, rd_hazard 0, ar_wait 0, wr_wait 0, rd_wait 1871, cycles 9324997, rd_occupancy 602606466, rd_latency 74.3
+  chat prompt (17 tokens, chunked prefill): ->    818 bit-exact  0.68 s at 100 MHz
+  chat pos  17: token    818: ->   8098 bit-exact  0.09 s at 100 MHz
+  chat pos  18: token   8098: ->  12090 bit-exact  0.09 s at 100 MHz
+  chat pos  19: token  12090: ->    529 bit-exact  0.09 s at 100 MHz
+  chat pos  20: token    529: ->   5818 bit-exact  0.09 s at 100 MHz
+  chat pos  21: token   5818: ->    563 bit-exact  0.09 s at 100 MHz
+  chat pos  22: token    563: ->    496 bit-exact  0.09 s at 100 MHz
+  chat pos  23: token    496: ->  12566 bit-exact  0.09 s at 100 MHz
+  chat pos  24: token  12566: -> 203928 bit-exact  0.09 s at 100 MHz
+  chat pos  25: token 203928: ->  35727 bit-exact  0.09 s at 100 MHz
+  chat pos  26: token  35727: ->  11252 bit-exact  0.09 s at 100 MHz
+  chat pos  27: token  11252: ->    529 bit-exact  0.09 s at 100 MHz
+  chat: 28 positions in 2.0 s; expected output 'The Great Wall of China is a massive fortification stretching thousands of'
+  last step: rd_beats 8140137, wr_beats 822047, bursts 1232661, rd_hazard 0, ar_wait 0, wr_wait 0, rd_wait 901, cycles 9379361, rd_occupancy 603807208, rd_latency 74.2
+   PASS
+ALL PASS

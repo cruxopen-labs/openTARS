@@ -6,6 +6,44 @@ package tm_fp_pkg;
 
   localparam logic [31:0] CANON_NAN = 32'h7FC00000;
 
+  // IEEE binary16 storage only. Subnormals are preserved on conversion; arithmetic
+  // still uses the FP32 contract. RNE on store, canonical NaN, signed zero/overflow.
+  function automatic logic [15:0] to_fp16(input logic [31:0] x);
+    logic [31:0] q, sig, lost, halfway;
+    logic [4:0] sh;
+    if (x[30:23] == 8'hff)
+      return x[22:0] != 0 ? 16'h7e00 : {x[31], 5'h1f, 10'b0};
+    if (x[30:23] > 8'd142) return {x[31], 5'h1f, 10'b0};
+    if (x[30:23] >= 8'd113) begin
+      q = ((32'(x[30:23]) - 32'd112) << 10) | (32'(x[22:0]) >> 13);
+      q = q + 32'(x[12] && ((|x[11:0]) || q[0]));
+    end else if (x[30:23] >= 8'd102) begin
+      sh = 5'(8'd126 - x[30:23]);
+      sig = {8'b0, 1'b1, x[22:0]};
+      q = sig >> sh;
+      lost = sig & ((32'd1 << sh) - 32'd1);
+      halfway = 32'd1 << (sh - 5'd1);
+      q = q + 32'(lost > halfway || (lost == halfway && q[0]));
+    end else q = 32'd0;
+    return {x[31], q[14:0]};
+  endfunction
+
+  function automatic logic [31:0] from_fp16(input logic [15:0] x);
+    logic [7:0] e;
+    logic [31:0] m;
+    if (x[14:10] == 5'h1f)
+      return x[9:0] != 0 ? CANON_NAN : {x[15], 8'hff, 23'b0};
+    if (x[14:10] != 0) begin
+      e = 8'(x[14:10]) + 8'd112;
+      return {x[15], e, x[9:0], 13'b0};
+    end
+    e = 8'd0; m = 32'd0;
+    for (int i = 0; i < 10; i++) if (x[i]) begin
+      e = 8'(103 + i); m = 32'(x[9:0]) << (23 - i);
+    end
+    return {x[15], e, m[22:0]};
+  endfunction
+
   // softplus latency (fpu_act ysp). The FPGA build (TM_FPGA) runs softplus 18 cycles later so
   // that it uses fpu_act's one exp and one recip in the same slots as GELU / SiLU (tm_fpu.sv)
 `ifdef TM_FPGA

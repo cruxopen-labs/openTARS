@@ -21,3 +21,7 @@ cp firmware/tars_kv260/tars_kv260.bit.bin firmware/tars_kv260/tars_kv260.dtbo fi
    /lib/firmware/xilinx/tars_kv260/
 echo "firmware installed: /lib/firmware/xilinx/tars_kv260"
 (cd data && sha256sum -c ../SHA256SUMS.data --quiet) && echo "data files: checksums ok"
+for f in SHA256SUMS.data_*; do                # the other models' exports (data_gemma3, ...), if present
+  [ -f "$f" ] && [ -d "${f#SHA256SUMS.}" ] || continue
+  (cd "${f#SHA256SUMS.}" && sha256sum -c "../$f" --quiet) && echo "${f#SHA256SUMS.} files: checksums ok"
+done

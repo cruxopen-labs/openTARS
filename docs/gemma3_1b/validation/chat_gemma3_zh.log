@@ -1,0 +1,10 @@
+tars_kv260: loaded to slot 0
+bitstream loaded
+TARS-mini on KV260: loading gemma-3-1b-it ...
+
+  ready in 1 s (1008 MiB image, 256 positions, prefill chunks [4])
+ready. context 256 tokens. /reset = new conversation, /quit = exit
+
+you> tars> 长城是中国古代一项伟大的军事防御工程，也是世界文化遗产，雄伟壮丽，绵延数千米。
+  [16 prompt tokens 0.6 s, 27 new tokens 2.8 s (9.54 tok/s), 43/256 context]
+you> 

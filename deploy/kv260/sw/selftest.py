@@ -3,7 +3,7 @@
   1. the hardware path: small random programs (the RTL regression's generator, some with an
      injected descriptor error) on the core, every byte and the end status against the golden
      model's (data/selftest/)
-  2. the model (Qwen3.5-0.8B or Qwen3-0.6B) token by token on the same prompts the export ran through the golden
+  2. the model (Qwen3.5-0.8B, Qwen3-0.6B or Gemma 3 1B) token by token on the same prompts the export ran through the golden
      model (data/expected.json): every step's logits must match bit for bit (SHA-256)
 
     sudo python3 selftest.py [--data ../data] [--quick]

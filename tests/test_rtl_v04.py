@@ -501,7 +501,8 @@ def test_fuzz_v04_coverage():
 
 # ---------------------------------------------------------------------- the Qwen3.5 blocks
 @pytest.mark.parametrize("chunks", [[3, 1]])
-def test_qwen_blocks_on_rtl(chunks):
+@pytest.mark.parametrize("state_dtype", ["fp32", "fp16"])
+def test_qwen_blocks_on_rtl(chunks, state_dtype):
     """LA + FA + final norm, small config (16 linear-attention heads, FA 4 / 2 heads x 128),
     prefill then decode: the RTL writes exactly the golden model's bytes."""
     pytest.importorskip("torch")
@@ -512,7 +513,8 @@ def test_qwen_blocks_on_rtl(chunks):
     w = Q.random_weights(cfg)
     T = sum(chunks)
     x = Q.random_inputs(cfg, T)
-    low = L.QwenLowering(cfg, w, max_tokens=T, ddr_bytes=1 << 21, scratch_bytes=1 << 18)
+    low = L.QwenLowering(cfg, w, max_tokens=T, ddr_bytes=1 << 21, scratch_bytes=1 << 18,
+                         state_dtype=state_dtype)
     low.input(x)
     t0 = 0
     for c in chunks:
@@ -564,6 +566,29 @@ def test_qwen3_model_greedy_on_rtl():
     assert len(ids) == 6
 
 
+def test_gemma3_model_greedy_on_rtl():
+    """Gemma 3 (a sliding and a global layer, four norms each, GeGLU, the first layer's down
+    projection in two K blocks; small dims), final norm, tied head (vocabulary 4096): greedy
+    decoding, prefill 3 then 2 decode steps, each step's queue on the RTL and on the golden model
+    from the same DDR: identical bytes."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(dict(Q.CFG_G3_SMALL, intermediate_size=1024),
+                        ["sliding_attention", "full_attention"], vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=8, ddr_bytes=1 << 23, head=True, queue_cap=2048, scratch_bytes=1 << 20)
+    low.lw[0]["down"] = low.lin_k(w["layers.0.mlp.down_proj.weight"], parts=2)
+
+    def run(ddr, q, n):
+        st, r = both(bytes(ddr), q, n, stall=10, lat=3)
+        assert st.done
+        return r.ddr
+    ids, _, _ = low.generate(run, [7, 1000, 42], 2)
+    assert len(ids) == 6
+
+
 def test_speculative_verify_on_rtl():
     """A speculative verify on the RTL: a chunk of 4 at an unaligned position with every row's logits
     (the head as 4-row GEMV passes), then a rejected draft's stale K / V rows overwritten by a chunk
@@ -588,7 +613,8 @@ def test_speculative_verify_on_rtl():
         ddr = bytearray(r.ddr)
 
 
-def test_mtp_speculative_on_rtl():
+@pytest.mark.parametrize("state_dtype", ["fp32", "fp16"])
+def test_mtp_speculative_on_rtl(state_dtype):
     """Qwen3.5 (LA then FA, small dims) with the MTP head: speculative rounds on the RTL, the verify's
     ping-pong state, a miss and a hit, every queue byte-identical to the golden model."""
     pytest.importorskip("torch")
@@ -598,7 +624,7 @@ def test_mtp_speculative_on_rtl():
     cfg = Q.make_config(Q.CFG_SMALL, ["linear_attention", "full_attention"], vocab=4096)
     w = {**Q.random_weights(cfg, embed=True), **Q.random_mtp(cfg)}
     low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 23, head=True, queue_cap=4096,
-                         scratch_bytes=1 << 20, verify_rows=2, mtp=True)
+                         scratch_bytes=1 << 20, verify_rows=2, mtp=True, state_dtype=state_dtype)
 
     def run(ddr, q, n):
         st, r = both(bytes(ddr), q, n, stall=10, lat=3)

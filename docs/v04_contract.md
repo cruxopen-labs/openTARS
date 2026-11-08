@@ -23,11 +23,11 @@ old meaning: every v0.3 program and test is unchanged. The new OPCODEs are not i
 | W8A8 GEMM | CTRL QM = 3 (V1.3.1 "group") | E_FIELD | QM_ROWCOL: per-row scales at BASE + 16 HDR_RSV |
 
 **ELT (0x06)**: y = act(A) op B, op = CTRL[1:0]: 0 MUL, 1 ADD, 2 MULADD (y = C + act(A) * B, C at
-BIAS_OFF with EPI.bias = 1 and the output's row stride; fp32 output only), 3 SUB (act(A) + -B).
+BIAS_OFF with EPI.bias = 1 and the output's row stride; fp32, or FP16 in v3.4 below), 3 SUB (act(A) + -B).
 HDR_RSV[1:0] = B mode: dense (row stride GROUP_SIZE * 16, 0 = dense), a row vector B[n], one value
 per row B[m], one value in all B[0]; HDR_RSV[2] = A as a row vector A[n]. B at W_OFF; 16-byte
 aligned except the per-row and scalar modes (4-byte). An ELT may run in place: A (dense) or C may
-be exactly the output (same offset and stride, fp32); any other overlap stays illegal.
+be exactly the output (same offset, stride and format); any other overlap stays illegal.
 
 **ROPE (0x07)**: rows of N fp32; R = K rotary dims (a multiple of 32, <= N); table rows at W_OFF,
 R fp32 each: cos[0:R/2] then sin[0:R/2]; row m uses table row m // G, G = GROUP_SIZE >= 1 (heads
@@ -39,6 +39,35 @@ CTRL[0] = 0 (NT): B is [N][K] and the sum is the contract's 16-lane order (eleme
 k mod 16, in order, then the pairwise fold), as the row sums. CTRL[0] = 1 (NN): B is [K][N] and
 the sum runs in k order from +0. B row stride GROUP_SIZE * 16 (0 = dense). No scale, bias or
 activation; the output conversion of EPI applies.
+
+### v3.4: packed FP16 DeltaNet state
+
+Firmware `0x00030400` additionally accepts:
+
+- ELT `HDR_RSV[3] = 1`: A is binary16, two bytes/element. B remains FP32.
+  Bits [2:0] retain their broadcast meanings; bits [23:4] must be zero.
+- ELT `EPI.out = 3`: Y is binary16. MULADD C has Y's format and row stride.
+  A and C may alias Y only with exactly the same format and layout as Y.
+- FDOT **NN only**, `HDR_RSV = 8`: B is binary16; A, products, accumulators and
+  output arithmetic remain FP32. NT and other HDR_RSV encodings remain rejected.
+- All row strides and range checks use **bytes**, including packed state views.
+  Half-state conversions use IEEE binary16 round-to-nearest-even, preserve signed
+  zero and half subnormals, overflow to signed infinity, and canonicalize NaNs
+  (`0x7e00` on store, `0x7fc00000` on load). Half subnormals expand exactly to
+  normal FP32 numbers; the existing FP32 FTZ arithmetic itself is unchanged.
+
+The numeric sequence is FP32 decay -> round/store FP16 -> expand for FP32
+`S^T k` -> FP32 delta/update -> round/store FP16 -> expand for FP32 `S^T q`.
+No FMA or FP16 accumulator is introduced. SFU, normalization, attention KV cache,
+convolution history, intermediate vectors and INT8 weights do not change.
+The 128-byte FDOT NN reader consumes four groups of 16 half values per beat,
+retaining 16 FP32 products/cycle. ELT still executes four elements per step;
+packing state is not a promise of twice the execution throughput.
+
+Old descriptors (`HDR_RSV[3] = 0`, original output codes) keep their semantics.
+Descriptor VERSION remains `0x0002`; the new encodings used previously rejected
+bits/codes. The exporter marks `state_dtype` and `min_firmware` and the runtime
+rejects FP16-state exports on old firmware before loading their image.
 
 **Row ops**: L2NORM = RMSNorm without the 1/N (rs = rsqrt(sum16(x x) + eps)). QUANT: amax =
 max16(|x|), q = q8(x, 127 * recip(amax)), s = amax * fp32(1/127); INT8 rows to Y (EPI.out = INT8,

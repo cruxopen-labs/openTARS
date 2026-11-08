@@ -69,14 +69,19 @@ class Dev(Program):
     def put(self, a: np.ndarray, dt: str = "<f4") -> int:
         return self._put(np.asarray(a), dt)
 
-    def const(self, a: np.ndarray) -> V:
+    def const(self, a: np.ndarray, fmt: int = C.OUT_FP32) -> V:
         a = np.asarray(a, F32).reshape(1, -1) if np.ndim(a) < 2 else np.asarray(a, F32)
+        if fmt == C.OUT_FP16:
+            from .numerics import to_fp16_bits
+            return V(self.put(to_fp16_bits(a), "<u2"), a.shape[0], a.shape[1], 2 * a.shape[1], fmt)
+        assert fmt == C.OUT_FP32
         return V(self.put(a), a.shape[0], a.shape[1], 4 * a.shape[1])
 
     # -- row ops
     def rowop(self, x: V, fn: int, y: V, gamma: V | None = None, eps: float = 0.0, start: int = 0,
               scale_out: int = 0) -> None:
         assert x.cols == y.cols and x.rows == y.rows
+        assert x.fmt == C.OUT_FP32 and y.fmt != C.OUT_FP16
         self._emit(OPCODE=C.OP_ROW, CTRL=fn, EPI=C.epi(C.ACT_NONE, y.fmt),
                    A_OFF=x.off, Y_OFF=y.off, M=x.rows, N=x.cols, K=start,
                    SCALE_OFF=gamma.off if gamma is not None else scale_out,
@@ -101,6 +106,7 @@ class Dev(Program):
     def gemm_rc(self, xq: V, srow: int, w: "QLin", y: V, act: int = C.ACT_NONE) -> None:
         """y = act((xq @ Wq.T) * srow[m] * scol[n] + b): W8A8 with per-token and per-channel scales."""
         assert xq.fmt == C.OUT_INT8 and xq.cols == w.k and y.cols == w.n and srow % 16 == 0
+        assert y.fmt != C.OUT_FP16
         self._emit(OPCODE=C.OP_GEMM, CTRL=C.ctrl(C.QM_ROWCOL, fusion=int(act != C.ACT_NONE)),
                    EPI=C.epi(act, y.fmt, int(w.b_off is not None)), A_OFF=xq.off, W_OFF=w.w_off,
                    SCALE_OFF=w.s_off, BIAS_OFF=w.b_off or 0, Y_OFF=y.off, M=xq.rows, N=w.n, K=w.k,
@@ -111,26 +117,35 @@ class Dev(Program):
         K = a.cols
         N = b.cols if nn else b.rows
         assert (b.rows if nn else b.cols) == K and y.cols == N and y.rows == a.rows
-        brow = 4 * b.cols
+        assert a.fmt == C.OUT_FP32 and y.fmt != C.OUT_FP16
+        assert b.fmt == C.OUT_FP32 or (nn and b.fmt == C.OUT_FP16)
+        brow = C.ESIZE[b.fmt] * b.cols
         self._emit(OPCODE=C.OP_FDOT, CTRL=int(nn), EPI=C.epi(C.ACT_NONE, y.fmt), A_OFF=a.off, W_OFF=b.off,
                    Y_OFF=y.off, M=a.rows, N=N, K=K, GROUP_SIZE=_ld16(b.ld, brow),
+                   HDR_RSV=C.STATE_FP16 if b.fmt == C.OUT_FP16 else 0,
                    LDA16=_ld16(a.ld, 4 * a.cols), LDY16=_ld16(y.ld, y.cols * C.ESIZE[y.fmt]))
 
     def elt(self, op: int, a: V, b: V, y: V, bmode: int = C.BM_DENSE, arow: bool = False,
             act: int = C.ACT_NONE, c: V | None = None) -> None:
         M, N = y.rows, y.cols
+        assert a.fmt in (C.OUT_FP32, C.OUT_FP16) and b.fmt == C.OUT_FP32
+        assert c is None or (c.fmt == y.fmt and c.ld == y.ld)
+        assert op != C.ELT_MULADD or y.fmt in (C.OUT_FP32, C.OUT_FP16)
         g = _ld16(b.ld, 4 * N) if bmode == C.BM_DENSE else 0
         self._emit(OPCODE=C.OP_ELT, CTRL=op, EPI=C.epi(act, y.fmt, int(c is not None)),
                    A_OFF=a.off, W_OFF=b.off, Y_OFF=y.off, BIAS_OFF=c.off if c is not None else 0,
-                   M=M, N=N, HDR_RSV=bmode | int(arow) << 2, GROUP_SIZE=g,
-                   LDA16=0 if arow else _ld16(a.ld, 4 * N), LDY16=_ld16(y.ld, N * C.ESIZE[y.fmt]))
+                   M=M, N=N, HDR_RSV=bmode | int(arow) << 2 | (C.STATE_FP16 if a.fmt == C.OUT_FP16 else 0),
+                   GROUP_SIZE=g, LDA16=0 if arow else _ld16(a.ld, C.ESIZE[a.fmt] * N),
+                   LDY16=_ld16(y.ld, N * C.ESIZE[y.fmt]))
 
     def act(self, x: V, act: int, y: V) -> None:
+        assert x.fmt == C.OUT_FP32 and y.fmt != C.OUT_FP16
         self._emit(OPCODE=C.OP_RELU, CTRL=0, EPI=C.epi(act, y.fmt), A_OFF=x.off, Y_OFF=y.off,
                    M=x.rows, N=x.cols, LDA16=_ld16(x.ld, 4 * x.cols),
                    LDY16=_ld16(y.ld, y.cols * C.ESIZE[y.fmt]))
 
     def rope(self, x: V, tab: V, rows_per_pos: int, rot: int, y: V) -> None:
+        assert x.fmt == tab.fmt == C.OUT_FP32 and y.fmt != C.OUT_FP16
         self._emit(OPCODE=C.OP_ROPE, CTRL=0, EPI=C.epi(C.ACT_NONE, y.fmt), A_OFF=x.off, W_OFF=tab.off,
                    Y_OFF=y.off, M=x.rows, N=x.cols, K=rot, GROUP_SIZE=rows_per_pos,
                    LDA16=_ld16(x.ld, 4 * x.cols), LDY16=_ld16(y.ld, y.cols * C.ESIZE[y.fmt]))
@@ -149,10 +164,26 @@ def pad16(n: int) -> int:
     return -(-n // 16) * 16
 
 
+GEMV_K = 4096                                 # the KV260 GEMV unit's longest x (a longer K is rejected)
+
+
+def input_embedding(cfg, rows: np.ndarray) -> np.ndarray:
+    """Embedding rows as the model consumes them (fp32). Gemma 3 scales them by sqrt(hidden), as
+    transformers does with fp32 weights: row * fp32(sqrt(H)), one fp32 rounding."""
+    rows = np.asarray(rows, F32)
+    if getattr(cfg, "model_type", "") != "gemma3_text":
+        return rows
+    return (rows * F32(cfg.hidden_size ** 0.5)).astype(F32)
+
+
 class QwenLowering:
     def __init__(self, cfg, weights: dict[str, np.ndarray], max_tokens: int, ddr_bytes: int = 1 << 27,
                  head: bool = False, queue_cap: int = 0, scratch_bytes: int = 1 << 22, verify_rows: int = 1,
-                 mtp: bool = False):
+                 mtp: bool = False, state_dtype: str = "fp32"):
+        if state_dtype not in ("fp32", "fp16"):
+            raise ValueError("state_dtype must be fp32 or fp16")
+        self.state_dtype = state_dtype
+        self.state_fmt = C.OUT_FP16 if state_dtype == "fp16" else C.OUT_FP32
         self.cfg, self.w, self.T = cfg, weights, max_tokens
         self.mtp = mtp                           # Qwen3.5's MTP head (weights["mtp.*"]): mtp_chunk drafts a token
         self.verify_rows = verify_rows           # logits rows a chunk can return (speculative decoding)
@@ -160,15 +191,26 @@ class QwenLowering:
         c = cfg
         self.H, self.eps = c.hidden_size, c.rms_norm_eps
         self.q3 = getattr(c, "model_type", "") == "qwen3"
+        # Gemma 3: every layer full attention without the output gate (a sliding window no shorter
+        # than the context changes nothing), four norms per layer, GeGLU, a RoPE base per layer type
+        self.gemma = getattr(c, "model_type", "") == "gemma3_text"
         self.types = list(c.layer_types)
         assert not self.q3 or set(self.types) == {"full_attention"}
+        if self.gemma:
+            assert set(self.types) <= {"sliding_attention", "full_attention"}
+            assert c.attn_logit_softcapping is None and c.final_logit_softcapping is None
+            assert c.hidden_activation == "gelu_pytorch_tanh"
+            assert max_tokens <= c.sliding_window, "the context must fit the sliding window"
+            assert all(r.get("rope_type", "default") == "default" for r in c.rope_parameters.values())
         # LA dims
         self.nk, self.nv = getattr(c, "linear_num_key_heads", 0), getattr(c, "linear_num_value_heads", 0)
         self.dk, self.dv = getattr(c, "linear_key_head_dim", 0), getattr(c, "linear_value_head_dim", 0)
         assert self.nk == self.nv, "the GQA repeat of linear attention is not lowered"
         # FA dims
         self.nh, self.nkv, self.hd = c.num_attention_heads, c.num_key_value_heads, c.head_dim
-        self.rot = int(self.hd * c.rope_parameters.get("partial_rotary_factor", 1.0))
+        self.rot = self.hd if self.gemma else int(self.hd * c.rope_parameters.get("partial_rotary_factor", 1.0))
+        # the attention scaling, folded into q_norm's gamma (1/16 for both models: exact)
+        self.qmul = c.query_pre_attn_scalar ** -0.5 if self.gemma else self.hd ** -0.5
         self.Tp = pad16(max_tokens)
         self.head = head
         self.taps = getattr(c, "linear_conv_kernel_dim", 4)
@@ -189,6 +231,18 @@ class QwenLowering:
         assert qw.n % 16 == 0 and qw.k % 16 == 0
         b = self.p.put(np.asarray(bias, F32)) if bias is not None else None
         return QLin(self.p.put(qw.q, "i1"), self.p.put(qw.scale), b, qw.n, qw.k)
+
+    def lin_k(self, w: np.ndarray, parts: int = 0) -> list[QLin]:
+        """A linear layer whose K may exceed the GEMV unit's: quantized as one (per-channel scales
+        over the whole row), stored as `parts` (default: the fewest) equal K blocks sharing the
+        scales; the partial products add in fp32."""
+        qw = quantize_weight(np.asarray(w, np.float64), per_channel=True)
+        parts = parts or -(-qw.k // GEMV_K)
+        kb = qw.k // parts
+        assert kb * parts == qw.k and kb % 16 == 0 and qw.n % 16 == 0
+        s = self.p.put(qw.scale)
+        return [QLin(self.p.put(np.ascontiguousarray(qw.q[:, c:c + kb]), "i1"), s, None, qw.n, kb)
+                for c in range(0, qw.k, kb)]
 
     def gamma1(self, w: np.ndarray, mul: float = 1.0) -> V:
         """The RMSNorm weight as gamma: Qwen3.5's zero-centered one, fp32(1 + w) (as torch: 1.0 +
@@ -225,6 +279,17 @@ class QwenLowering:
     def _fa_weights(self, A: str) -> dict:
         W = self.w
         sa = A + "self_attn."
+        if self.gemma:
+            g1 = lambda n, mul=1.0: self.gamma1(W[A + n + ".weight"], mul)
+            return dict(
+                ln_in=g1("input_layernorm"), attn_norm=g1("post_attention_layernorm"),
+                ln_post=g1("pre_feedforward_layernorm"), mlp_norm=g1("post_feedforward_layernorm"),
+                q=self.lin(W[sa + "q_proj.weight"]), g=None,
+                k=self.lin(W[sa + "k_proj.weight"]), v=self.lin(W[sa + "v_proj.weight"]),
+                qn=g1("self_attn.q_norm", self.qmul), kn=g1("self_attn.k_norm"),
+                o=self.lin(W[sa + "o_proj.weight"]),
+                gate=self.lin(W[A + "mlp.gate_proj.weight"]), up=self.lin(W[A + "mlp.up_proj.weight"]),
+                down=self.lin_k(W[A + "mlp.down_proj.weight"]))
         if self.q3:                                            # no output gate
             q, g = self.lin(W[sa + "q_proj.weight"]), None
         else:                                                  # per head: the query's rows, then the gate's
@@ -235,7 +300,7 @@ class QwenLowering:
             ln_post=self.gamma1(W[A + "post_attention_layernorm.weight"]),
             q=q, g=g,
             k=self.lin(W[sa + "k_proj.weight"]), v=self.lin(W[sa + "v_proj.weight"]),
-            qn=self.gamma1(W[sa + "q_norm.weight"], self.hd ** -0.5), kn=self.gamma1(W[sa + "k_norm.weight"]),
+            qn=self.gamma1(W[sa + "q_norm.weight"], self.qmul), kn=self.gamma1(W[sa + "k_norm.weight"]),
             o=self.lin(W[sa + "o_proj.weight"]),
             gate=self.lin(W[A + "mlp.gate_proj.weight"]), up=self.lin(W[A + "mlp.up_proj.weight"]),
             down=self.lin(W[A + "mlp.down_proj.weight"]))
@@ -245,6 +310,9 @@ class QwenLowering:
         self.taps = 4
         self.lw = [self._la_weights(f"layers.{i}.") if t == "linear_attention" else self._fa_weights(f"layers.{i}.")
                    for i, t in enumerate(self.types)]
+        if self.gemma:
+            for w, t in zip(self.lw, self.types):
+                w["rope"] = t
         self.final_norm = self.gamma1(self.w["norm.weight"])
         if self.mtp:
             W = self.w
@@ -253,10 +321,15 @@ class QwenLowering:
                            gh=self.gamma1(W["mtp.pre_fc_norm_hidden.weight"]),
                            norm=self.gamma1(W["mtp.norm.weight"]))
         # RoPE table: row t = cos(t * inv_freq), sin(t * inv_freq) (fp32, as torch computes them)
-        th = F32(self.cfg.rope_parameters["rope_theta"])
-        inv = (1.0 / (th ** (np.arange(0, self.rot, 2, dtype=F32) / F32(self.rot)))).astype(F32)
-        fr = (np.arange(self.T, dtype=F32)[:, None] * inv[None, :]).astype(F32)
-        self.rope_tab = p.const(np.concatenate([np.cos(fr), np.sin(fr)], axis=1).astype(F32))
+        def table(theta: float) -> V:
+            th = F32(theta)
+            inv = (1.0 / (th ** (np.arange(0, self.rot, 2, dtype=F32) / F32(self.rot)))).astype(F32)
+            fr = (np.arange(self.T, dtype=F32)[:, None] * inv[None, :]).astype(F32)
+            return p.const(np.concatenate([np.cos(fr), np.sin(fr)], axis=1).astype(F32))
+        if self.gemma:
+            self.rope_tabs = {t: table(self.cfg.rope_parameters[t]["rope_theta"]) for t in sorted(set(self.types))}
+        else:
+            self.rope_tab = table(self.cfg.rope_parameters["rope_theta"])
         # the head: the tied embedding table as INT8 per-channel row blocks
         self.head_lins = []
         if self.head:
@@ -267,7 +340,7 @@ class QwenLowering:
 
     def embed(self, ids) -> np.ndarray:
         """The host's lookup: input embeddings [len(ids), H] fp32."""
-        return np.asarray(self.w["embed_tokens.weight"][np.asarray(ids)], F32)
+        return input_embedding(self.cfg, self.w["embed_tokens.weight"][np.asarray(ids)])
 
     # ------------------------------------------------------------------ state in DDR
     def _state(self) -> None:
@@ -283,7 +356,7 @@ class QwenLowering:
                 # conv inputs, rows t + hist (the first hist rows are the zero history); DeltaNet states
                 # with the MTP two copies: a verify's last token updates the other one (see _la)
                 self.st.append(dict(cin={n: p.mat(T + hist, d) for n, d in (("q", kd), ("k", kd), ("v", vd))},
-                                    S=[[p.mat(self.dk, self.dv) for _ in range(self.nv)]
+                                    S=[[p.mat(self.dk, self.dv, self.state_fmt) for _ in range(self.nv)]
                                        for _ in range(2 if self.mtp else 1)]))
             else:                                  # KV cache (zero padded)
                 self.st.append(dict(kc=p.mat(self.Tp, self.nkv * self.hd), vc=p.mat(self.Tp, self.nkv * self.hd)))
@@ -354,18 +427,30 @@ class QwenLowering:
         p.top = self.end
 
     def _mlp(self, w: dict, x: V, out: V) -> None:
-        """out = x + down(silu(gate(h)) * up(h)), h = RMSNorm(x)."""
+        """out = x + down(silu(gate(h)) * up(h)), h = RMSNorm(x). Gemma 3: GELU (tanh) for SiLU,
+        the down projection in K blocks, its output normalized before the residual add."""
         p, n = self.p, x.rows
         h = p.mat(n, self.H)
         p.norm(x, w["ln_post"], self.eps, h)
         hq, hs = p.quant(h)
         g, u = p.mat(n, w["gate"].n), p.mat(n, w["up"].n)
-        p.gemm_rc(hq, hs, w["gate"], g, act=C.ACT_SILU)
+        p.gemm_rc(hq, hs, w["gate"], g, act=C.ACT_GELU if self.gemma else C.ACT_SILU)
         p.gemm_rc(hq, hs, w["up"], u)
-        p.elt(C.ELT_MUL, g, u, g)                                   # in place: silu(gate) * up
+        p.elt(C.ELT_MUL, g, u, g)                                   # in place: act(gate) * up
         gq, gs = p.quant(g)
         d = p.mat(n, self.H)
-        p.gemm_rc(gq, gs, w["down"], d)
+        downs = w["down"] if isinstance(w["down"], list) else [w["down"]]
+        c0 = 0
+        for i, lin in enumerate(downs):
+            part = d if i == 0 else p.mat(n, self.H)
+            p.gemm_rc(gq.colv(c0, lin.k), gs, lin, part)
+            if i:
+                p.elt(C.ELT_ADD, d, part, d)
+            c0 += lin.k
+        if w.get("mlp_norm") is not None:
+            dn = p.mat(n, self.H)
+            p.norm(d, w["mlp_norm"], self.eps, dn)
+            d = dn
         p.elt(C.ELT_ADD, x, d, out)
 
     def _la(self, li: int, t0: int, n: int) -> None:
@@ -452,7 +537,7 @@ class QwenLowering:
         p.norm(q.heads(hd), w["qn"], self.eps, qn.heads(hd))
         p.norm(k.heads(hd), w["kn"], self.eps, kn.heads(hd))
         qr = p.mat(n, nh * hd)
-        tab = self.rope_tab.rowv(t0, (n * nh - 1) // nh + 1)
+        tab = (self.rope_tabs[w["rope"]] if "rope" in w else self.rope_tab).rowv(t0, (n * nh - 1) // nh + 1)
         p.rope(qn.heads(hd), tab, nh, self.rot, qr.heads(hd))
         p.rope(kn.heads(hd), tab, nkv, self.rot, kc.rowv(t0, n).heads(hd))
         # attention per query head over keys [0, t0 + n) (padded to 16, masked causally)
@@ -474,6 +559,10 @@ class QwenLowering:
         aq, as_ = p.quant(att)
         o = p.mat(n, self.H)
         p.gemm_rc(aq, as_, w["o"], o)
+        if w.get("attn_norm") is not None:
+            on = p.mat(n, self.H)
+            p.norm(o, w["attn_norm"], self.eps, on)
+            o = on
         x1 = p.mat(n, self.H)
         p.elt(C.ELT_ADD, x, o, x1)
         self._mlp(w, x1, out)

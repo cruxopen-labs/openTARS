@@ -1,0 +1,229 @@
+{
+  "schema": 1,
+  "model": "gemma-3-1b-it",
+  "firmware": {
+    "R": 8,
+    "C": 2,
+    "VG": 1,
+    "page_bits": 21,
+    "mem_mb": 1024,
+    "version": 197376
+  },
+  "profile_cap": 0,
+  "mhz": 100.0,
+  "ddr_reference_GBs": 12.79,
+  "notes": [
+    "Queues are not split; counters are read only after halt and bridge idle.",
+    "Wait counters overlap and must not be added or treated as compute-idle time.",
+    "Traffic/core-busy time is not an instantaneous DDR or arithmetic utilization.",
+    "Write bytes count 32-byte bus beats, including masked bytes.",
+    "Host time includes counter reads, workload decoding and hashing.",
+    "golden_verified=null means no independent expected logits at that position."
+  ],
+  "samples": [
+    {
+      "cycles": 68388833,
+      "core_ms": 683.88833,
+      "queues": 5,
+      "traffic": {
+        "read_bytes": 5363251712,
+        "write_bus_bytes": 346045344,
+        "read_GBs": 7.8422916092163755,
+        "write_GBs": 0.5059968547789081,
+        "read_pct_of_reference": 61.315806170573694
+      },
+      "counters": {
+        "rd_beats": 41900404,
+        "wr_beats": 10813917,
+        "bursts": 7618249,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 11654154,
+        "rd_wait": 15582
+      },
+      "waits_pct": {
+        "rd_wait": 0.02278442154437699,
+        "wr_wait": 17.041018962847343,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 79.09024686253622,
+      "descriptors": 4730,
+      "operator_counters_available": false,
+      "label": "prefill 17 tokens",
+      "logits_sha256": "85080205a6f4f7516586068c44ada048862c4db295ffcdec3e3813e244bd5e3b",
+      "golden_verified": true,
+      "host_ms": 770.9380209998926
+    },
+    {
+      "cycles": 9385495,
+      "core_ms": 93.85495,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 1041898496,
+        "write_bus_bytes": 26305984,
+        "read_GBs": 11.10115658257769,
+        "write_GBs": 0.2802833947490249,
+        "read_pct_of_reference": 86.79559485987248
+      },
+      "counters": {
+        "rd_beats": 8139832,
+        "wr_beats": 822062,
+        "bursts": 1232305,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 1097
+      },
+      "waits_pct": {
+        "rd_wait": 0.011688248728490079,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 74.24280009710274,
+      "descriptors": 946,
+      "operator_counters_available": false,
+      "label": "decode t=16",
+      "logits_sha256": "85080205a6f4f7516586068c44ada048862c4db295ffcdec3e3813e244bd5e3b",
+      "golden_verified": true,
+      "host_ms": 130.58398599969223
+    },
+    {
+      "cycles": 9586732,
+      "core_ms": 95.86732,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 1052857600,
+        "write_bus_bytes": 26366560,
+        "read_GBs": 10.982445321304485,
+        "write_GBs": 0.2750317835107939,
+        "read_pct_of_reference": 85.86743800863555
+      },
+      "counters": {
+        "rd_beats": 8225450,
+        "wr_beats": 823955,
+        "bursts": 1269123,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 1197
+      },
+      "waits_pct": {
+        "rd_wait": 0.012486006701762394,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 73.8697997070069,
+      "descriptors": 946,
+      "operator_counters_available": false,
+      "label": "decode t=64",
+      "logits_sha256": "df6356dd0f601ddd94aedd35f43f811f19c64bf240ee1954c850feb2d2625247",
+      "golden_verified": null,
+      "host_ms": 132.48993500019424
+    },
+    {
+      "cycles": 9844979,
+      "core_ms": 98.44979,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 1067314176,
+        "write_bus_bytes": 26447200,
+        "read_GBs": 10.841203175750806,
+        "write_GBs": 0.2686364287826312,
+        "read_pct_of_reference": 84.76312099883351
+      },
+      "counters": {
+        "rd_beats": 8338392,
+        "wr_beats": 826475,
+        "bursts": 1317327,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 1846
+      },
+      "waits_pct": {
+        "rd_wait": 0.018750674836381064,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 73.44662112311343,
+      "descriptors": 946,
+      "operator_counters_available": false,
+      "label": "decode t=128",
+      "logits_sha256": "e2e380bad44dcea9434beed3f1144f1ec502e8646488bb8e242b732831738060",
+      "golden_verified": null,
+      "host_ms": 135.63102599800914
+    },
+    {
+      "cycles": 10100946,
+      "core_ms": 101.00945999999999,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 1081894144,
+        "write_bus_bytes": 26527072,
+        "read_GBs": 10.710819996463698,
+        "write_GBs": 0.2626196793844854,
+        "read_pct_of_reference": 83.74370599267942
+      },
+      "counters": {
+        "rd_beats": 8452298,
+        "wr_beats": 828971,
+        "bursts": 1365550,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 2175
+      },
+      "waits_pct": {
+        "rd_wait": 0.021532636646112158,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 72.86935209809214,
+      "descriptors": 946,
+      "operator_counters_available": false,
+      "label": "decode t=192",
+      "logits_sha256": "f7c598e81ff7b4e4244c36861736fccec8560ff1f1152959e21d4725ce90b77b",
+      "golden_verified": null,
+      "host_ms": 137.7038869977696
+    },
+    {
+      "cycles": 10336626,
+      "core_ms": 103.36626,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 1092704640,
+        "write_bus_bytes": 26586816,
+        "read_GBs": 10.571192572895644,
+        "write_GBs": 0.25720980908083546,
+        "read_pct_of_reference": 82.65201386157656
+      },
+      "counters": {
+        "rd_beats": 8536755,
+        "wr_beats": 830838,
+        "bursts": 1403850,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 3214
+      },
+      "waits_pct": {
+        "rd_wait": 0.031093318071099794,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 72.8170076334626,
+      "descriptors": 946,
+      "operator_counters_available": false,
+      "label": "decode t=250",
+      "logits_sha256": "98b0ffdd7f5ee8c6e8def1349792ba1690e85c9a1be1ef2e08b9391ea80bcbc7",
+      "golden_verified": null,
+      "host_ms": 140.23434200134943
+    }
+  ]
+}

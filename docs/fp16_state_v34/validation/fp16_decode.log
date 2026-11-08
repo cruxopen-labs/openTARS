@@ -1,0 +1,77 @@
+  loading weights 64 / 878 MiB  loading weights 128 / 878 MiB  loading weights 192 / 878 MiB  loading weights 256 / 878 MiB  loading weights 320 / 878 MiB  loading weights 384 / 878 MiB  loading weights 448 / 878 MiB  loading weights 512 / 878 MiB  loading weights 576 / 878 MiB  loading weights 640 / 878 MiB  loading weights 704 / 878 MiB  loading weights 768 / 878 MiB  loading weights 832 / 878 MiB  loading weights 878 / 878 MiB
+  ready in 3 s (878 MiB image, 256 positions, prefill chunks [4])
+  reached position 0
+
+decode t=16: 135.678 core ms, read 6.703 GB/s, write 0.332 GB/s
+  operator       cycles       %       ms   rd_wait%   wr_wait%   hazard%
+  overhead       654345    4.82    6.543       0.00       0.00      0.00
+  gemv          6394811   47.13   63.948       0.00       0.00      0.00
+  elt           5192068   38.27   51.921       0.17       0.00      0.00
+  fdot_nt         40347    0.30    0.403       0.00       0.00      0.00
+  fdot_nn        744576    5.49    7.446       7.26       0.00      0.00
+  rope             8249    0.06    0.082       0.73       0.00      0.00
+  quant          110441    0.81    1.104       0.00       0.00      0.00
+  norm           281775    2.08    2.818       0.00       0.00      0.00
+  softmax         15959    0.12    0.160       0.00       0.00      0.00
+  act            125263    0.92    1.253       0.00       0.00      0.00
+  reached position 32
+
+decode t=64: 136.590 core ms, read 6.696 GB/s, write 0.330 GB/s
+  operator       cycles       %       ms   rd_wait%   wr_wait%   hazard%
+  overhead       655015    4.80    6.550       0.00       0.00      0.00
+  gemv          6394406   46.81   63.944       0.00       0.00      0.00
+  elt           5191356   38.01   51.914       0.17       0.00      0.00
+  fdot_nt         85323    0.62    0.853       0.00       0.00      0.00
+  fdot_nn        785201    5.75    7.852       8.31       0.00      0.00
+  rope             8311    0.06    0.083       0.72       0.00      0.00
+  quant          110472    0.81    1.105       0.00       0.00      0.00
+  norm           281953    2.06    2.820       0.00       0.00      0.00
+  softmax         21644    0.16    0.216       0.00       0.00      0.00
+  act            125281    0.92    1.253       0.00       0.00      0.00
+  reached position 64
+  reached position 96
+
+decode t=128: 137.752 core ms, read 6.688 GB/s, write 0.328 GB/s
+  operator       cycles       %       ms   rd_wait%   wr_wait%   hazard%
+  overhead       654708    4.75    6.547       0.00       0.00      0.00
+  gemv          6391416   46.40   63.914       0.00       0.00      0.00
+  elt           5192851   37.70   51.929       0.17       0.00      0.00
+  fdot_nt        145085    1.05    1.451       0.00       0.00      0.00
+  fdot_nn        835659    6.07    8.357       7.11       0.00      0.00
+  rope             8248    0.06    0.082       0.73       0.00      0.00
+  quant          110522    0.80    1.105       0.00       0.00      0.00
+  norm           282050    2.05    2.821       0.00       0.00      0.00
+  softmax         29381    0.21    0.294       0.00       0.00      0.00
+  act            125256    0.91    1.253       0.00       0.00      0.00
+  reached position 128
+  reached position 160
+
+decode t=192: 138.958 core ms, read 6.678 GB/s, write 0.325 GB/s
+  operator       cycles       %       ms   rd_wait%   wr_wait%   hazard%
+  overhead       655301    4.72    6.553       0.00       0.00      0.00
+  gemv          6393391   46.01   63.934       0.00       0.00      0.00
+  elt           5192909   37.37   51.929       0.17       0.00      0.00
+  fdot_nt        205098    1.48    2.051       0.00       0.00      0.00
+  fdot_nn        886520    6.38    8.865       7.08       0.00      0.00
+  rope             8268    0.06    0.083       0.71       0.00      0.00
+  quant          110425    0.79    1.104       0.00       0.00      0.00
+  norm           282042    2.03    2.820       0.00       0.00      0.00
+  softmax         36583    0.26    0.366       0.00       0.00      0.00
+  act            125311    0.90    1.253       0.00       0.00      0.00
+  reached position 192
+  reached position 224
+
+decode t=250: 139.901 core ms, read 6.669 GB/s, write 0.323 GB/s
+  operator       cycles       %       ms   rd_wait%   wr_wait%   hazard%
+  overhead       654838    4.68    6.548       0.00       0.00      0.00
+  gemv          6397916   45.73   63.979       0.00       0.00      0.00
+  elt           5193484   37.12   51.935       0.17       0.00      0.00
+  fdot_nt        250062    1.79    2.501       0.00       0.00      0.00
+  fdot_nn        925939    6.62    9.259       6.82       0.00      0.00
+  rope             8221    0.06    0.082       0.73       0.00      0.00
+  quant          110464    0.79    1.105       0.00       0.00      0.00
+  norm           281993    2.02    2.820       0.00       0.00      0.00
+  softmax         41886    0.30    0.419       0.00       0.00      0.00
+  act            125271    0.90    1.253       0.00       0.00      0.00
+
+Saved results/fp16_decode.json

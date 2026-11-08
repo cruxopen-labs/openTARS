@@ -17,6 +17,7 @@ module tb_kv260 #(
   parameter int VG = 4,
   parameter int OQ = 128,
   parameter int VQMIN = 32,
+  parameter bit PROFILE = 1,
   parameter longint MEM_BYTES = 64'h40_0000,
   parameter int PAGE_BITS = 12
 );
@@ -66,7 +67,7 @@ module tb_kv260 #(
   logic [31:0]  m_wstrb;
 
   tm_kv260_top #(.R(R), .C(C), .VG(VG), .NB(NB), .OT(OT), .HB(HB), .OQ(OQ), .LG(LG), .VQMIN(VQMIN),
-                 .MEM_BYTES(MEM_BYTES), .PAGE_BITS(PAGE_BITS), .NPT(NPT), .PA_BITS(40), .GB(4)) dut (
+                 .MEM_BYTES(MEM_BYTES), .PAGE_BITS(PAGE_BITS), .NPT(NPT), .PA_BITS(40), .GB(4), .PROFILE(PROFILE)) dut (
     .clk, .rstn, .hclk, .hrstn(rstn),
     .s_axil_awaddr(awaddr), .s_axil_awvalid(awvalid), .s_axil_awready(awready), .s_axil_wdata(wdata),
     .s_axil_wstrb(wstrb), .s_axil_wvalid(wvalid), .s_axil_wready(wready), .s_axil_bresp(bresp),
@@ -246,7 +247,7 @@ module tb_kv260 #(
 
   initial begin
     string img, outp;
-    logic [31:0] st, opx, clo, chi, id, rdb, wrb;
+    logic [31:0] st, opx, clo, chi, id, rdb, wrb, pc;
     logic [63:0] q_addr;
     logic [31:0] q_len;
     longint unsigned cyc;
@@ -294,6 +295,16 @@ module tb_kv260 #(
       if (cyc % 64'd10000000 < 32) begin $display("PROGRESS %0d", cyc); $fflush(); end
     end while (!(st[0] && st[8]) && cyc < maxcyc);
     lr(14'h010, opx); lr(14'h020, clo); lr(14'h024, chi); lr(14'h028, rdb); lr(14'h02C, wrb);
+    lr(14'h05C, pc);
+    $display("PERF profile_cap %0d", pc);
+    if (pc == 32'h5052_4601) begin
+      for (int i = 0; i < 10; i++) begin
+        for (int j = 0; j < 4; j++) begin
+          lr(14'h100 + 14'(16*i + 4*j), pc);
+          $display("PERF operator_%0d_%0d %0d", i, j, pc);
+        end
+      end
+    end
     begin
       int fd;
       fd = $fopen(outp, "wb");

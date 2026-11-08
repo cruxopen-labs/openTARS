@@ -43,6 +43,21 @@ CFG_Q3_06B = dict(
 # its small config, for RTL runs (the rotary width = the head dim: a multiple of 32)
 CFG_Q3_SMALL = dict(CFG_Q3_06B, hidden_size=256, intermediate_size=512, num_attention_heads=4,
                     num_key_value_heads=2, head_dim=64)
+# Gemma 3 1B (google/gemma-3-1b-it config.json): 26 layers, five sliding-window (512) layers to one
+# global, 4 query heads / 1 KV head x 256, QK-norm, four RMSNorms (1 + w) per layer, GeGLU (tanh),
+# local / global RoPE bases 1e4 / 1e6, tied embeddings scaled by sqrt(hidden), vocabulary 262144
+VOCAB_G3_1B = 262144
+LAYERS_G3_1B = (["sliding_attention"] * 5 + ["full_attention"]) * 4 + ["sliding_attention"] * 2
+CFG_G3_1B = dict(
+    model_type="gemma3_text", hidden_size=1152, intermediate_size=6912, num_attention_heads=4,
+    num_key_value_heads=1, head_dim=256, query_pre_attn_scalar=256, rms_norm_eps=1e-6, vocab_size=16,
+    sliding_window=512, hidden_activation="gelu_pytorch_tanh", max_position_embeddings=32768,
+    attn_logit_softcapping=None, final_logit_softcapping=None,
+    rope_parameters={"full_attention": dict(rope_type="default", rope_theta=1000000.0),
+                     "sliding_attention": dict(rope_type="default", rope_theta=10000.0)},
+)
+CFG_G3_SMALL = dict(CFG_G3_1B, hidden_size=256, intermediate_size=512, num_attention_heads=4,
+                    num_key_value_heads=2, head_dim=64, query_pre_attn_scalar=64, sliding_window=64)
 # A small config with the same structure, for RTL runs
 # (16 linear-attention heads as the real model; head dims kept multiples of 16 and the rotary
 # width a multiple of 32, as the contract needs)
@@ -61,7 +76,19 @@ def is_qwen3(cfg) -> bool:
     return getattr(cfg, "model_type", "") == "qwen3"
 
 
+def is_gemma3(cfg) -> bool:
+    return getattr(cfg, "model_type", "") == "gemma3_text"
+
+
 def make_config(base: dict, layer_types: list[str] | None = None, vocab: int | None = None):
+    if base.get("model_type") == "gemma3_text":
+        from transformers.models.gemma3.configuration_gemma3 import Gemma3TextConfig
+        b = {k: v for k, v in base.items() if k != "model_type"}
+        lt = list(layer_types or ["sliding_attention", "full_attention"])
+        cfg = Gemma3TextConfig(**dict(b, vocab_size=vocab or b["vocab_size"], tie_word_embeddings=True),
+                               num_hidden_layers=len(lt), layer_types=lt)
+        cfg._attn_implementation = "eager"
+        return cfg
     if base.get("model_type") == "qwen3":
         from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
         b = {k: v for k, v in base.items() if k != "model_type"}
@@ -84,6 +111,8 @@ def _meta_model(cfg):
     torch = _torch()
     if is_qwen3(cfg):
         from transformers.models.qwen3.modeling_qwen3 import Qwen3Model as M
+    elif is_gemma3(cfg):
+        from transformers.models.gemma3.modeling_gemma3 import Gemma3TextModel as M
     else:
         from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel as M
     with torch.device("meta"):
@@ -127,7 +156,7 @@ def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndar
 
 
 CKPT_PREFIX = "model.language_model."     # Qwen3_5ForConditionalGeneration's text model
-CKPT_PREFIX_Q3 = "model."                 # Qwen3ForCausalLM's
+CKPT_PREFIX_Q3 = "model."                 # Qwen3ForCausalLM's (and Gemma3ForCausalLM's)
 
 
 def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
@@ -139,7 +168,7 @@ def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
     from safetensors import safe_open
     torch = _torch()
     shapes = {n: tuple(p.shape) for n, p in _meta_model(cfg).named_parameters()}
-    pre = CKPT_PREFIX_Q3 if is_qwen3(cfg) else CKPT_PREFIX
+    pre = CKPT_PREFIX_Q3 if is_qwen3(cfg) or is_gemma3(cfg) else CKPT_PREFIX
     w = {}
     for f in sorted(Path(path).glob("*.safetensors")):
         with safe_open(str(f), framework="pt") as st:

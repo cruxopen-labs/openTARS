@@ -48,6 +48,7 @@ module tm_core
   output logic [3:0]    err_code,
   output logic [31:0]   op_idx,
   output logic [63:0]   cycles,
+  output logic [3:0]    profile_class,     // observation only: 0 overhead, 1..9 operators, 15 idle
   // read port: a request is accepted when mr_ready; data returns later on mr_rvalid, in request
   // order, any number of requests may be in flight
   output logic          mr_req,
@@ -143,6 +144,28 @@ module tm_core
   wire [14:0] d_ldy16  = desc[30:16];
   wire [15:0] d_dep    = desc[15:0];
 
+  // Mutually exclusive busy-cycle attribution. Fetch/check cycles (including their memory
+  // waits) are separate from execution; output drain remains with the executing descriptor.
+  // This signal never feeds the datapath or its handshakes.
+  always_comb begin
+    profile_class = 4'd0;
+    if (state == S_IDLE || state == S_HALT) profile_class = 4'd15;
+    else if (state == S_NEXT || state == S_FETCH || state == S_FETCH_GOT ||
+             state == S_CRC || state == S_CHKW || state == S_CHK4 || state == S_CHECK ||
+             ((state == S_RD_REQ || state == S_RD_WAIT) && ret == S_FETCH_GOT))
+      profile_class = 4'd0;
+    else case (d_op)
+      OP_GEMM: profile_class = 4'd1;
+      OP_ELT: profile_class = 4'd2;
+      OP_FDOT: profile_class = d_ctrl[0] ? 4'd4 : 4'd3;
+      OP_ROPE: profile_class = 4'd5;
+      OP_ROW: profile_class = d_ctrl[2:0] == 3'd4 ? 4'd6 :
+                              d_ctrl[1:0] == 2'd0 ? 4'd8 : 4'd7;
+      OP_RELU: profile_class = 4'd9;
+      default: profile_class = 4'd0;
+    endcase
+  end
+
   // ------------------------------------------------------------------ CRC-32/ISO-HDLC
   logic [31:0] crc;
   logic [6:0]  cb;
@@ -231,13 +254,16 @@ module tm_core
     f_gv   = (ARR == 0) ? f_gemm && d_m != 16'd0 && d_k <= 16'd4096
                         : f_gemm && d_m != 16'd0 && 32'(d_m) <= GB && d_k <= 16'd4096 && (d_m == 16'd1 || 32'(d_k >> 4) >= 32'(d_m));
     f_x    = f_v4 || f_quant || f_gv;      // the extension unit's
-    f_hdr_ok = f_conv || (f_gemm && f_qm == 3'd3) || (f_elt && d_hrsv < 24'd8);
+    f_hdr_ok = f_conv || (f_gemm && f_qm == 3'd3) || (f_elt && d_hrsv < 24'd16) ||
+               (f_fdot && d_ctrl[0] && d_hrsv == 24'd8);
     f_grp_ok = f_conv || f_v4;
-    f_brow = f_fdot ? (d_ctrl[0] ? 32'(d_n) : 32'(d_k)) << 2 : (f_elt && d_hrsv[1:0] == 2'd0) ? 32'(d_n) << 2 : 32'd0;
+    f_brow = f_fdot ? (d_ctrl[0] ? 32'(d_n) : 32'(d_k)) << (d_hrsv[3] ? 1 : 2) :
+             (f_elt && d_hrsv[1:0] == 2'd0) ? 32'(d_n) << 2 : 32'd0;
     f_ldb  = (d_group != 0) ? 32'(d_group) << 4 : f_brow;
-    f_es   = (f_out == 2'd0) ? 32'd4 : (f_out == 2'd1) ? 32'd2 : (f_out == 2'd2) ? 32'd1 : 32'd4;
-    f_arow = f_gemm ? 32'(d_k) : f_conv ? g_cin : f_fdot ? 32'(d_k) * 32'd4 : 32'(d_n) * 32'd4;
-    f_yrow = 32'(d_n) << ((f_out == 2'd1) ? 1 : (f_out == 2'd2) ? 0 : 2);
+    f_es   = (f_out == 2'd0) ? 32'd4 : (f_out == 2'd2) ? 32'd1 : 32'd2;
+    f_arow = f_gemm ? 32'(d_k) : f_conv ? g_cin : f_fdot ? 32'(d_k) * 32'd4 :
+             32'(d_n) << ((f_elt && d_hrsv[3]) ? 1 : 2);
+    f_yrow = 32'(d_n) << ((f_out == 2'd0) ? 2 : (f_out == 2'd2) ? 0 : 1);
     f_lda  = (d_lda16 != 0) ? 32'(d_lda16) * 32'd16 : f_arow;
     f_ldy  = (d_ldy16 != 0) ? 32'(d_ldy16) * 32'd16 : f_yrow;
     f_ns   = (f_qm == 3'd1) ? 32'd1 : 32'(d_n);
@@ -251,7 +277,7 @@ module tm_core
     cv[4]  = (d_op != OP_GEMM && d_op != OP_RELU && d_op != OP_ROW && !f_conv && !f_v4) ||
              (ARR == 0 && (f_conv || (f_gemm && d_k > 16'd4096)));
     cv[5]  = d_core != 8'(CORE_ID) || d_dep != 0 || (d_hrsv != 0 && !f_hdr_ok) || (d_group != 0 && !f_grp_ok) ||
-             d_ctrl[15:13] != 0 || d_epi[15:6] != 0 || f_out == 2'd3 ||
+             d_ctrl[15:13] != 0 || d_epi[15:6] != 0 || (f_out == 2'd3 && !f_elt) ||
              (f_out != 2'd2 && d_oscale != 0) ||
              (f_gm && (f_qm == 3'd0 || f_qm > 3'd3 || (f_conv && f_qm == 3'd3) || !f_sym || f_adt != 4'd1 ||
                        f_wdt != 4'd1 || ((f_act != 3'd0) != f_fus))) ||
@@ -265,7 +291,7 @@ module tm_core
              (f_quant && (f_bias || d_woff != 0 || d_boff != 0 || f_out != 2'd2 || d_oscale != 0)) ||
              (f_row && !f_bias && d_boff != 0) ||
              (f_elt && (d_ctrl[15:2] != 0 || d_k != 0 || d_soff != 0 || f_bias != (d_ctrl[1:0] == 2'd2) ||
-                        (d_ctrl[1:0] == 2'd2 && f_out != 2'd0) || (!f_bias && d_boff != 0))) ||
+                        (d_ctrl[1:0] == 2'd2 && f_out != 2'd0 && f_out != 2'd3) || (!f_bias && d_boff != 0))) ||
              (f_rope && (d_ctrl != 0 || f_act != 3'd0 || f_bias || d_soff != 0 || d_boff != 0 || d_group == 0)) ||
              (f_fdot && (d_ctrl[15:1] != 0 || f_act != 3'd0 || f_bias || d_soff != 0 || d_boff != 0));
     cv[6]  = d_m == 0 || d_n == 0 || d_n[3:0] != 0 || ((f_gm || f_fdot) && (d_k == 0 || d_k[3:0] != 0)) ||
@@ -391,10 +417,10 @@ module tm_core
         r_bx  <= f_rope ? 66'(r_ptab) : f_fdot ? 66'(r_pb) + 66'(f_brow) :      // r_hix: the next state
                  (d_hrsv[1:0] == 2'd0) ? 66'(r_pb) + (66'(d_n) << 2) : (d_hrsv[1:0] == 2'd1) ? 66'(d_n) << 2 :
                  (d_hrsv[1:0] == 2'd2) ? 66'(d_m) << 2 : 66'd4;
-        r_hic <= 66'(d_base) + 66'(d_boff) + 66'(r_py) + (66'(d_n) << 2);
+        r_hic <= 66'(d_base) + 66'(d_boff) + 66'(r_py) + 66'(f_yrow);
         r_hiq <= 66'(d_base) + 66'(d_soff) + (66'(d_m) << 2);
         r_hir <= 66'(d_base) + {38'b0, d_hrsv, 4'b0} + (66'(d_m) << 2);
-        if (f_elt && d_hrsv[2]) r_hia <= 66'(d_base) + 66'(d_aoff) + (66'(d_n) << 2);   // one A row
+        if (f_elt && d_hrsv[2]) r_hia <= 66'(d_base) + 66'(d_aoff) + 66'(f_arow);   // one A row
         r_d1  <= 64'(r_lda) - 64'((r_cin >> 4) - 32'd1) * 64'd16;
         r_d2  <= 64'(r_pwl) - r_kwl - 64'((r_cin >> 4) - 32'd1) * 64'd16;
         r_porig <= d_base + 64'(d_aoff) - r_pp;
@@ -439,7 +465,7 @@ module tm_core
   logic        x_run;                     // state == S_X_RUN, as its own register (the read port's select)
   logic [2:0]  xp_op;
   logic [1:0]  xp_eop, xp_bmode;
-  logic        xp_arow;
+  logic        xp_arow, xp_half;
   logic [31:0] xp_g, xp_ldb, xp_lat, xp_lq_len;
   logic [63:0] xp_c, xp_rq_addr, xp_lq_addr, xp_r;
   logic [1:0]  xp_qm;
@@ -723,7 +749,7 @@ module tm_core
   // datapath; its outputs take output-queue slots like the epilogue's rows (tap: xp_lat)
   tm_xpu #(.VQ(VQ), .RB(RB), .MB(GB), .RW(RW)) u_xpu (
     .clk, .rst, .start(xp_start), .op(xp_op), .qm(xp_qm), .bias(x_bias), .r_base(xp_r), .eop(xp_eop), .bmode(xp_bmode), .arow(xp_arow),
-    .act(x_act), .out(x_out), .osc(x_osc), .m_n(x_m), .n_n(x_n), .k_n(x_k), .g_n(xp_g),
+    .act(x_act), .out(x_out), .half_in(xp_half), .osc(x_osc), .m_n(x_m), .n_n(x_n), .k_n(x_k), .g_n(xp_g),
     .a_base(x_a), .b_base(x_w), .c_base(xp_c), .y_base(x_y), .s_base(x_s),
     .lda(x_lda), .ldb(xp_ldb), .ldy(x_ldy), .busy(xp_busy), .lat(xp_lat),
     .rq_go(xp_rq_go), .rq_addr(xp_rq_addr), .rq_ready(mr_ready && x_run),
@@ -1553,13 +1579,13 @@ module tm_core
             x_reuse  <= 32'(d_k >> 4) <= 32'(KR);
             x_minner <= r_minner;
             x_lda <= f_lda; x_ldy <= f_ldy; x_es <= f_es; x_osc <= d_oscale;
-            x_esl <= (f_out == 2'd1) ? 2'd1 : (f_out == 2'd2) ? 2'd0 : 2'd2;
+            x_esl <= (f_out == 2'd0) ? 2'd2 : (f_out == 2'd2) ? 2'd0 : 2'd1;
             x_rldy <= r_rldy; ymr <= 0;
             // x_fn 3 (internal): RELU, the activation-only single pass of the row engine
             x_row <= f_row && !f_quant; x_xpu <= f_x; xp_start <= f_x; x_run <= f_x;
             xp_op <= f_elt ? 3'd0 : f_rope ? 3'd1 : f_fdot ? (d_ctrl[0] ? 3'd3 : 3'd2) : f_gv ? 3'd5 : 3'd4;
             xp_qm <= f_qm[1:0]; xp_r <= d_base + {36'b0, d_hrsv, 4'b0};
-            xp_eop <= d_ctrl[1:0]; xp_bmode <= d_hrsv[1:0]; xp_arow <= d_hrsv[2];
+            xp_eop <= d_ctrl[1:0]; xp_bmode <= d_hrsv[1:0]; xp_arow <= d_hrsv[2]; xp_half <= d_hrsv[3];
             xp_g <= 32'(d_group); xp_ldb <= f_ldb; xp_c <= d_base + 64'(d_boff);
             x_fn <= (d_op == OP_RELU) ? 2'd3 : (d_ctrl[1:0] == 2'd3) ? 2'd2 : d_ctrl[1:0];
             x_l2 <= f_row && d_ctrl[2:0] == 3'd3;

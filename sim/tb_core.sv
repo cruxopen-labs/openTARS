@@ -23,6 +23,7 @@ module tb_core #(
   logic [31:0]  q_len;
   logic         halted, done;
   logic [3:0]   err_code;
+  logic [3:0]   profile_class;
   logic [31:0]  op_idx;
   logic [63:0]  cycles;
   logic         mr_req, mr_ready, mr_rvalid, mw_req, mw_ready;

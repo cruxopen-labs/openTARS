@@ -1,8 +1,9 @@
-"""Export Qwen3.5-0.8B or Qwen3-0.6B (the checkpoint's config.json model_type picks it) for the KV260
-board runtime (deploy/kv260/sw/tars_board.py).
+"""Export Qwen3.5-0.8B, Qwen3-0.6B or Gemma 3 1B (the checkpoint's config.json model_type picks it) for
+the KV260 board runtime (deploy/kv260/sw/tars_board.py).
 
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3.5-0.8B [--T 256] [--out deploy/kv260/data]
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3-0.6B --out deploy/kv260/data_qwen3
+    python3 tools/export_kv260.py --ckpt ~/models/gemma-3-1b-it --out deploy/kv260/data_gemma3  # T <= 512 (its window)
     python3 tools/export_kv260.py --mtp --out deploy/kv260/data_mtp  # Qwen3.5 with its MTP head: speculative decoding
     python3 tools/export_kv260.py --out deploy/kv260/data --check-only      # redo the golden check
     python3 tools/export_kv260.py --chunks-only    # add the prefill chunk queues to an export
@@ -10,7 +11,8 @@ board runtime (deploy/kv260/sw/tars_board.py).
 Writes into --out:
   image.bin        the DDR image from address 0: the zeroed states, the queue region, scratch, the
                    quantized weights (the core's address space is the board's 1 GB buffer)
-  embed_bf16.bin   the embedding table [vocab, H] as bf16 (the checkpoint's own values: exact)
+  embed_bf16.bin   the embedding table [vocab, H] as bf16 (the checkpoint's own values: exact; Gemma's
+                   input embedding is a row times the manifest's embed_scale, in fp32)
   queues.bin       one descriptor queue per token position t (t0 = t, one token), back to back
   queues_c<n>.bin  prefill: one queue per chunk of n tokens at t0 (a multiple of ALIGN): the weights
                    are read once for n tokens; bit-identical to n one-token steps (the same
@@ -53,6 +55,18 @@ def model_config(ckpt):
     mt = json.loads((Path(ckpt) / "config.json").read_text()).get("model_type", "")
     if mt == "qwen3":
         return Q.make_config(Q.CFG_Q3_06B, vocab=Q.VOCAB_Q3_06B)
+    if mt in ("gemma3_text", "gemma3"):
+        cfg = Q.make_config(Q.CFG_G3_1B, Q.LAYERS_G3_1B, vocab=Q.VOCAB_G3_1B)
+        from transformers import AutoConfig
+        have = AutoConfig.from_pretrained(ckpt)
+        have = getattr(have, "text_config", have)
+        keys = ("hidden_size", "intermediate_size", "num_attention_heads", "num_key_value_heads", "head_dim",
+                "query_pre_attn_scalar", "rms_norm_eps", "vocab_size", "layer_types", "hidden_activation",
+                "attn_logit_softcapping", "final_logit_softcapping", "rope_parameters")
+        diff = {k: (getattr(have, k, None), getattr(cfg, k)) for k in keys if getattr(have, k, None) != getattr(cfg, k)}
+        if diff:
+            raise ValueError(f"{ckpt}: not the Gemma 3 1B this export supports: {diff}")
+        return cfg
     return Q.make_config(Q.CFG_08B, Q.LAYERS_08B, vocab=Q.VOCAB_08B)
 
 
@@ -72,7 +86,7 @@ def export(args) -> None:
     (bits >> 16).astype(np.uint16).tofile(out / "embed_bf16.bin")
     print(f"embedding {emb.shape} ({time.time() - t:.0f} s)", flush=True)
     low = L.QwenLowering(cfg, w, max_tokens=args.T, ddr_bytes=DDR, head=True, queue_cap=16384,
-                         verify_rows=2 if args.mtp else 1, mtp=args.mtp)
+                         verify_rows=2 if args.mtp else 1, mtp=args.mtp, state_dtype=args.state_dtype)
     del w
     assert low.p.base == 0
     img = bytes(low.p.ddr[:low.end])
@@ -97,15 +111,27 @@ def export(args) -> None:
     tmpl = tok.apply_chat_template([{"role": "user", "content": mark}], tokenize=False,
                                    add_generation_prompt=True, enable_thinking=False)
     pre, post = tmpl.split(mark)
+    bos = []
+    if tok.bos_token and pre.startswith(tok.bos_token):      # Gemma: <bos> once, at position 0
+        pre, bos = pre[len(tok.bos_token):], [int(tok.bos_token_id)]
+    assert bos or not low.gemma, "Gemma's chat template starts with <bos>"
+    turn_end = "<end_of_turn>\n" if low.gemma else "<|im_end|>\n"
     gen = json.loads((Path(args.ckpt) / "generation_config.json").read_text()) \
         if (Path(args.ckpt) / "generation_config.json").exists() else {}
     eos = gen.get("eos_token_id", [])
-    eos = sorted({*(eos if isinstance(eos, list) else [eos]), tok.convert_tokens_to_ids("<|im_end|>"),
-                  tok.convert_tokens_to_ids("<|endoftext|>")} - {None})
+    vocab = tok.get_vocab()
+    eos = sorted({*(eos if isinstance(eos, list) else [eos]),
+                  *(vocab[s] for s in ("<|im_end|>", "<|endoftext|>", "<end_of_turn>", "<eos>") if s in vocab)}
+                 - {None})
     for fn in ("tokenizer.json", "tokenizer_config.json"):
         if (Path(args.ckpt) / fn).exists():
             shutil.copy(Path(args.ckpt) / fn, out / fn)
+    la = not (low.q3 or low.gemma)                           # DeltaNet states: Qwen3.5 only
     m = dict(model=Path(args.ckpt).resolve().name, max_tokens=args.T, hidden=low.H, vocab=low.vocab,
+             state_dtype=args.state_dtype if la else "fp32",
+             min_firmware=0x30400 if args.state_dtype == "fp16" and la else 0,
+             bos_ids=bos, turn_end=turn_end,
+             embed_scale=float(L.input_embedding(cfg, np.ones((1, 1), np.float32))[0, 0]) if low.gemma else None,
              image_bytes=len(img) + pad, state_end=low.scratch_end, qbase=low.qbase,
              queue_cap=low.queue_cap, x0_off=low.x0.off, x0_ld=low.x0.ld, logits_off=low.logits.off,
              mem_bytes=DDR, chat_prefix=pre, chat_suffix=post, eos_ids=[int(e) for e in eos],
@@ -177,7 +203,8 @@ def chunks_only(args) -> None:
     m = json.loads((out / "manifest.json").read_text())
     cfg = model_config(args.ckpt)
     w = Q.load_weights(args.ckpt, cfg, embed=True)          # as export(): the head is tied to it
-    low = L.QwenLowering(cfg, w, max_tokens=m["max_tokens"], ddr_bytes=DDR, head=True, queue_cap=m["queue_cap"])
+    low = L.QwenLowering(cfg, w, max_tokens=m["max_tokens"], ddr_bytes=DDR, head=True, queue_cap=m["queue_cap"],
+                         state_dtype=m.get("state_dtype", "fp32"))
     del w
     img = bytes(low.p.ddr[:low.end])
     have = (out / "image.bin").read_bytes()[:len(img)]
@@ -221,9 +248,8 @@ def check(out: Path) -> None:
     model = B.Qwen(dev, out, log=lambda *a, **k: None)
     res = []
     for c in CHECKS:
-        text = m["chat_prefix"] + c["text"] + m["chat_suffix"] if c["chat"] else c["text"]
-        ids = tk.encode(text, add_special_tokens=False).ids
         model.new_conversation()
+        ids = model.encode(tk, c["text"], chat=c["chat"])
         steps, t = [], time.time()
         cur = ids[0]
         gen = []
@@ -251,6 +277,9 @@ def main() -> int:
     ap.add_argument("--check-only", action="store_true")
     ap.add_argument("--chunks-only", action="store_true")
     ap.add_argument("--mtp", action="store_true", help="Qwen3.5: the MTP head and the speculative queues")
+    ap.add_argument("--state-dtype", choices=("fp16", "fp32"), default="fp32",
+                    help="DeltaNet S storage only; all arithmetic remains FP32. fp16 needs firmware v3.4, "
+                         "changes outputs and measured slower on the KV260")
     args = ap.parse_args()
     out = Path(args.out)
     if args.chunks_only:

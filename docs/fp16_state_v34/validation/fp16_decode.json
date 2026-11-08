@@ -1,0 +1,1005 @@
+{
+  "schema": 1,
+  "model": "Qwen3.5-0.8B",
+  "firmware": {
+    "R": 8,
+    "C": 2,
+    "VG": 1,
+    "page_bits": 21,
+    "mem_mb": 1024,
+    "version": 197632
+  },
+  "profile_cap": 1347569153,
+  "mhz": 100.0,
+  "ddr_reference_GBs": 12.79,
+  "notes": [
+    "Queues are not split; counters are read only after halt and bridge idle.",
+    "Wait counters overlap and must not be added or treated as compute-idle time.",
+    "Traffic/core-busy time is not an instantaneous DDR or arithmetic utilization.",
+    "Write bytes count 32-byte bus beats, including masked bytes.",
+    "Host time includes counter reads, workload decoding and hashing.",
+    "golden_verified=null means no independent expected logits at that position."
+  ],
+  "samples": [
+    {
+      "cycles": 13567834,
+      "core_ms": 135.67834000000002,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 909517056,
+        "write_bus_bytes": 45075712,
+        "read_GBs": 6.703480128073501,
+        "write_GBs": 0.3322248193779493,
+        "read_pct_of_reference": 52.41188528595388
+      },
+      "counters": {
+        "rd_beats": 7105602,
+        "wr_beats": 1408616,
+        "bursts": 1539108,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 63037
+      },
+      "waits_pct": {
+        "rd_wait": 0.4646062149640097,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 70.52509878825187,
+      "descriptors": 2730,
+      "operator_counters_available": true,
+      "operators": [
+        {
+          "cycles": 654345,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "overhead",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 4.822766846941081,
+          "ms": 6.54345,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 6394811,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "gemv",
+          "descriptors": 232,
+          "macs": 751894528,
+          "pct": 47.13214356838387,
+          "ms": 63.94811,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 5192068,
+          "rd_wait": 8922,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "elt",
+          "descriptors": 1482,
+          "macs": 0,
+          "pct": 38.267478803175216,
+          "ms": 51.92068,
+          "waits_pct": {
+            "rd_wait": 0.1718390437105215,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 40347,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nt",
+          "descriptors": 48,
+          "macs": 393216,
+          "pct": 0.29737244721596684,
+          "ms": 0.40347,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 744576,
+          "rd_wait": 54055,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nn",
+          "descriptors": 624,
+          "macs": 9830400,
+          "pct": 5.487802990514182,
+          "ms": 7.44576,
+          "waits_pct": {
+            "rd_wait": 7.259836470689359,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 8249,
+          "rd_wait": 60,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "rope",
+          "descriptors": 12,
+          "macs": 0,
+          "pct": 0.060798208468647245,
+          "ms": 0.08249,
+          "waits_pct": {
+            "rd_wait": 0.7273608922293612,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 110441,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "quant",
+          "descriptors": 97,
+          "macs": 0,
+          "pct": 0.813991385802627,
+          "ms": 1.10441,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 281775,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "norm",
+          "descriptors": 115,
+          "macs": 0,
+          "pct": 2.076786906443578,
+          "ms": 2.81775,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 15959,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "softmax",
+          "descriptors": 48,
+          "macs": 0,
+          "pct": 0.11762378578629426,
+          "ms": 0.15959,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 125263,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "act",
+          "descriptors": 72,
+          "macs": 0,
+          "pct": 0.9232350572685367,
+          "ms": 1.25263,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        }
+      ],
+      "label": "decode t=16",
+      "logits_sha256": "28c3326b8d6dfe15c72b1ec1b7935c3e66092f435e277ed802dd3b7ce5dfa986",
+      "golden_verified": null,
+      "host_ms": 189.52616599926841
+    },
+    {
+      "cycles": 13658962,
+      "core_ms": 136.58962,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 914553728,
+        "write_bus_bytes": 45103712,
+        "read_GBs": 6.695631249285268,
+        "write_GBs": 0.33021332074867765,
+        "read_pct_of_reference": 52.350517977210856
+      },
+      "counters": {
+        "rd_beats": 7144951,
+        "wr_beats": 1409491,
+        "bursts": 1557565,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 74210
+      },
+      "waits_pct": {
+        "rd_wait": 0.5433062922350907,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 70.44933912073014,
+      "descriptors": 2730,
+      "operator_counters_available": true,
+      "operators": [
+        {
+          "cycles": 655015,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "overhead",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 4.795496173135264,
+          "ms": 6.55015,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 6394406,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "gemv",
+          "descriptors": 232,
+          "macs": 751894528,
+          "pct": 46.81472867411155,
+          "ms": 63.94406,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 5191356,
+          "rd_wait": 8925,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "elt",
+          "descriptors": 1482,
+          "macs": 0,
+          "pct": 38.00695836184331,
+          "ms": 51.91356,
+          "waits_pct": {
+            "rd_wait": 0.17192039998798003,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 85323,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nt",
+          "descriptors": 48,
+          "macs": 983040,
+          "pct": 0.6246667938603241,
+          "ms": 0.85323,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 785201,
+          "rd_wait": 65225,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nn",
+          "descriptors": 624,
+          "macs": 10420224,
+          "pct": 5.7486139869193575,
+          "ms": 7.85201,
+          "waits_pct": {
+            "rd_wait": 8.30679023587591,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 8311,
+          "rd_wait": 60,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "rope",
+          "descriptors": 12,
+          "macs": 0,
+          "pct": 0.06084649770604823,
+          "ms": 0.08311,
+          "waits_pct": {
+            "rd_wait": 0.7219347852244014,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 110472,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "quant",
+          "descriptors": 97,
+          "macs": 0,
+          "pct": 0.8087876662955794,
+          "ms": 1.10472,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 281953,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "norm",
+          "descriptors": 115,
+          "macs": 0,
+          "pct": 2.064234456468947,
+          "ms": 2.81953,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 21644,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "softmax",
+          "descriptors": 48,
+          "macs": 0,
+          "pct": 0.15846006453491854,
+          "ms": 0.21644,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 125281,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "act",
+          "descriptors": 72,
+          "macs": 0,
+          "pct": 0.9172073251247057,
+          "ms": 1.25281,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        }
+      ],
+      "label": "decode t=64",
+      "logits_sha256": "37feed227ef5105b9aa518cc67b37690ae7f81f683e862e8b37cc2f3118ac302",
+      "golden_verified": null,
+      "host_ms": 190.2236019996053
+    },
+    {
+      "cycles": 13775176,
+      "core_ms": 137.75176,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 921245952,
+        "write_bus_bytes": 45141024,
+        "read_GBs": 6.687725456284552,
+        "write_GBs": 0.32769834664907366,
+        "read_pct_of_reference": 52.288705678534406
+      },
+      "counters": {
+        "rd_beats": 7197234,
+        "wr_beats": 1410657,
+        "bursts": 1581936,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 68360
+      },
+      "waits_pct": {
+        "rd_wait": 0.49625500247691934,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 70.29748150470027,
+      "descriptors": 2730,
+      "operator_counters_available": true,
+      "operators": [
+        {
+          "cycles": 654708,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "overhead",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 4.752810417812448,
+          "ms": 6.54708,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 6391416,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "gemv",
+          "descriptors": 232,
+          "macs": 751894528,
+          "pct": 46.3980714293596,
+          "ms": 63.91416,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 5192851,
+          "rd_wait": 8922,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "elt",
+          "descriptors": 1482,
+          "macs": 0,
+          "pct": 37.69716626488112,
+          "ms": 51.92851,
+          "waits_pct": {
+            "rd_wait": 0.1718131330939401,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 145085,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nt",
+          "descriptors": 48,
+          "macs": 1769472,
+          "pct": 1.0532351818953165,
+          "ms": 1.45085,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 835659,
+          "rd_wait": 59378,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nn",
+          "descriptors": 624,
+          "macs": 11206656,
+          "pct": 6.06641250899444,
+          "ms": 8.35659,
+          "waits_pct": {
+            "rd_wait": 7.105529887190828,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 8248,
+          "rd_wait": 60,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "rope",
+          "descriptors": 12,
+          "macs": 0,
+          "pct": 0.05987582300218886,
+          "ms": 0.08248,
+          "waits_pct": {
+            "rd_wait": 0.7274490785645005,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 110522,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "quant",
+          "descriptors": 97,
+          "macs": 0,
+          "pct": 0.8023273169068765,
+          "ms": 1.10522,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 282050,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "norm",
+          "descriptors": 115,
+          "macs": 0,
+          "pct": 2.0475237485168973,
+          "ms": 2.8205,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 29381,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "softmax",
+          "descriptors": 48,
+          "macs": 0,
+          "pct": 0.2132894708568515,
+          "ms": 0.29381,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 125256,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "act",
+          "descriptors": 72,
+          "macs": 0,
+          "pct": 0.9092878377742687,
+          "ms": 1.25256,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        }
+      ],
+      "label": "decode t=128",
+      "logits_sha256": "3a21926b8d0e1f66e302f41d3ca232006f2a6be6f58a837a63c31c6c09d55d45",
+      "golden_verified": null,
+      "host_ms": 191.7752279987326
+    },
+    {
+      "cycles": 13895848,
+      "core_ms": 138.95848,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 927946624,
+        "write_bus_bytes": 45176192,
+        "read_GBs": 6.677869706116533,
+        "write_GBs": 0.3251056862452727,
+        "read_pct_of_reference": 52.21164742858899
+      },
+      "counters": {
+        "rd_beats": 7249583,
+        "wr_beats": 1411756,
+        "bursts": 1606734,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 71784
+      },
+      "waits_pct": {
+        "rd_wait": 0.5165859615044724,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 70.1564421015664,
+      "descriptors": 2730,
+      "operator_counters_available": true,
+      "operators": [
+        {
+          "cycles": 655301,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "overhead",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 4.715804317951664,
+          "ms": 6.55301,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 6393391,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "gemv",
+          "descriptors": 232,
+          "macs": 751894528,
+          "pct": 46.009361933147225,
+          "ms": 63.93391,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 5192909,
+          "rd_wait": 8923,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "elt",
+          "descriptors": 1482,
+          "macs": 0,
+          "pct": 37.370220226933974,
+          "ms": 51.92909,
+          "waits_pct": {
+            "rd_wait": 0.17183047112899533,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 205098,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nt",
+          "descriptors": 48,
+          "macs": 2555904,
+          "pct": 1.475966058350667,
+          "ms": 2.05098,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 886520,
+          "rd_wait": 62802,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nn",
+          "descriptors": 624,
+          "macs": 11993088,
+          "pct": 6.379747389292111,
+          "ms": 8.8652,
+          "waits_pct": {
+            "rd_wait": 7.084104137526508,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 8268,
+          "rd_wait": 59,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "rope",
+          "descriptors": 12,
+          "macs": 0,
+          "pct": 0.059499787274587344,
+          "ms": 0.08268,
+          "waits_pct": {
+            "rd_wait": 0.7135945815191098,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 110425,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "quant",
+          "descriptors": 97,
+          "macs": 0,
+          "pct": 0.7946618299221465,
+          "ms": 1.10425,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 282042,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "norm",
+          "descriptors": 115,
+          "macs": 0,
+          "pct": 2.0296854139452303,
+          "ms": 2.82042,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 36583,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "softmax",
+          "descriptors": 48,
+          "macs": 0,
+          "pct": 0.26326568914685883,
+          "ms": 0.36583,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 125311,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "act",
+          "descriptors": 72,
+          "macs": 0,
+          "pct": 0.9017873540355363,
+          "ms": 1.25311,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        }
+      ],
+      "label": "decode t=192",
+      "logits_sha256": "91ae05beec10c67869ed69cc599c533a6aa30fb6e3e7e2a2d605400983a8008d",
+      "golden_verified": null,
+      "host_ms": 193.37381399964215
+    },
+    {
+      "cycles": 13990074,
+      "core_ms": 139.90073999999998,
+      "queues": 1,
+      "traffic": {
+        "read_bytes": 932977408,
+        "write_bus_bytes": 45206720,
+        "read_GBs": 6.668852559321702,
+        "write_GBs": 0.323134245036874,
+        "read_pct_of_reference": 52.1411458899273
+      },
+      "counters": {
+        "rd_beats": 7288886,
+        "wr_beats": 1412710,
+        "bursts": 1625463,
+        "rd_hazard": 0,
+        "ar_wait": 0,
+        "wr_wait": 0,
+        "rd_wait": 72171
+      },
+      "waits_pct": {
+        "rd_wait": 0.5158728967409322,
+        "wr_wait": 0.0,
+        "rd_hazard": 0.0,
+        "ar_wait": 0.0
+      },
+      "mean_read_latency_cycles": 70.03790551807231,
+      "descriptors": 2730,
+      "operator_counters_available": true,
+      "operators": [
+        {
+          "cycles": 654838,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "overhead",
+          "descriptors": 0,
+          "macs": 0,
+          "pct": 4.680732925358365,
+          "ms": 6.54838,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 6397916,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "gemv",
+          "descriptors": 232,
+          "macs": 751894528,
+          "pct": 45.731823863118954,
+          "ms": 63.97916,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 5193484,
+          "rd_wait": 8923,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "elt",
+          "descriptors": 1482,
+          "macs": 0,
+          "pct": 37.12263423338575,
+          "ms": 51.93484,
+          "waits_pct": {
+            "rd_wait": 0.17181144680526597,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 250062,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nt",
+          "descriptors": 48,
+          "macs": 3145728,
+          "pct": 1.7874244267757269,
+          "ms": 2.50062,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 925939,
+          "rd_wait": 63188,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "fdot_nn",
+          "descriptors": 624,
+          "macs": 12582912,
+          "pct": 6.618542546665586,
+          "ms": 9.25939,
+          "waits_pct": {
+            "rd_wait": 6.824207642188092,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 8221,
+          "rd_wait": 60,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "rope",
+          "descriptors": 12,
+          "macs": 0,
+          "pct": 0.05876309160337537,
+          "ms": 0.08221,
+          "waits_pct": {
+            "rd_wait": 0.7298382191947451,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 110464,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "quant",
+          "descriptors": 97,
+          "macs": 0,
+          "pct": 0.7895883895967956,
+          "ms": 1.10464,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 281993,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "norm",
+          "descriptors": 115,
+          "macs": 0,
+          "pct": 2.0156648206435506,
+          "ms": 2.81993,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 41886,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "softmax",
+          "descriptors": 48,
+          "macs": 0,
+          "pct": 0.29939798745882257,
+          "ms": 0.41886,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        },
+        {
+          "cycles": 125271,
+          "rd_wait": 0,
+          "wr_wait": 0,
+          "rd_hazard": 0,
+          "name": "act",
+          "descriptors": 72,
+          "macs": 0,
+          "pct": 0.8954277153930709,
+          "ms": 1.25271,
+          "waits_pct": {
+            "rd_wait": 0.0,
+            "wr_wait": 0.0,
+            "rd_hazard": 0.0
+          }
+        }
+      ],
+      "label": "decode t=250",
+      "logits_sha256": "dcbc43619ea08585de848bda0ef1b125880e30d22a6fd2ed02ae13b387f6d535",
+      "golden_verified": null,
+      "host_ms": 194.42762399921776
+    }
+  ]
+}

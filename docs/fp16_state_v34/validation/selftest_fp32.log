@@ -1,0 +1,56 @@
+TARS-mini: {'R': 8, 'C': 2, 'VG': 1, 'page_bits': 21, 'mem_mb': 1024, 'version': 197632}
+1. hardware path (random programs vs the golden model)
+  case0   status ok  (False, E_VERSION, op 1) memory ok  2397 cycles
+  case1   status ok  (True, OK, op 8) memory ok  21499 cycles
+  case2   status ok  (True, OK, op 8) memory ok  13768 cycles
+  case3   status ok  (False, E_CRC, op 7) memory ok  13628 cycles
+  case4   status ok  (False, E_ALIGN, op 7) memory ok  8457 cycles
+  case5   status ok  (False, E_FIELD, op 3) memory ok  11205 cycles
+  case6   status ok  (False, E_FIELD, op 1) memory ok  6249 cycles
+  case7   status ok  (True, OK, op 8) memory ok  17911 cycles
+  case8   status ok  (True, OK, op 8) memory ok  16659 cycles
+  case9   status ok  (False, E_FIELD, op 1) memory ok  1368 cycles
+  case10  status ok  (False, E_FIELD, op 0) memory ok  235 cycles
+  case11  status ok  (True, OK, op 8) memory ok  16439 cycles
+  case12  status ok  (False, E_CRC, op 0) memory ok  221 cycles
+  case13  status ok  (True, OK, op 8) memory ok  13832 cycles
+  case14  status ok  (True, OK, op 8) memory ok  15443 cycles
+  case15  status ok  (True, OK, op 8) memory ok  18795 cycles
+  case16  status ok  (False, E_CRC, op 0) memory ok  238 cycles
+  case17  status ok  (True, OK, op 8) memory ok  18467 cycles
+  case18  status ok  (True, OK, op 8) memory ok  10903 cycles
+  case19  status ok  (True, OK, op 8) memory ok  13869 cycles
+  case20  status ok  (False, E_OPCODE, op 0) memory ok  214 cycles
+  case21  status ok  (False, E_OPCODE, op 7) memory ok  11181 cycles
+  case22  status ok  (True, OK, op 8) memory ok  9812 cycles
+  case23  status ok  (False, E_CRC, op 4) memory ok  7175 cycles
+   PASS
+2. Qwen3.5-0.8B (logits vs the golden model, bit for bit)
+  loading weights 64 / 887 MiB  loading weights 128 / 887 MiB  loading weights 192 / 887 MiB  loading weights 256 / 887 MiB  loading weights 320 / 887 MiB  loading weights 384 / 887 MiB  loading weights 448 / 887 MiB  loading weights 512 / 887 MiB  loading weights 576 / 887 MiB  loading weights 640 / 887 MiB  loading weights 704 / 887 MiB  loading weights 768 / 887 MiB  loading weights 832 / 887 MiB  loading weights 887 / 887 MiB
+  ready in 61 s (887 MiB image, 256 positions, prefill chunks [4])
+  plain prompt (5 tokens, chunked prefill): ->  11751 bit-exact  0.49 s at 100 MHz
+  plain pos   5: token  11751: ->     13 bit-exact  0.13 s at 100 MHz
+  plain pos   6: token     13: ->    198 bit-exact  0.13 s at 100 MHz
+  plain pos   7: token    198: ->    760 bit-exact  0.13 s at 100 MHz
+  plain pos   8: token    760: ->   6511 bit-exact  0.13 s at 100 MHz
+  plain pos   9: token   6511: ->    314 bit-exact  0.13 s at 100 MHz
+  plain pos  10: token    314: ->   9338 bit-exact  0.13 s at 100 MHz
+  plain pos  11: token   9338: ->    369 bit-exact  0.13 s at 100 MHz
+  plain: 12 positions in 1.7 s; expected output ' Paris.\nThe capital of France is'
+  last step: rd_beats 7123287, wr_beats 1971340, bursts 1444469, rd_hazard 0, ar_wait 0, wr_wait 0, rd_wait 8937, cycles 13126153, rd_occupancy 497867469, rd_latency 69.9
+  chat prompt (20 tokens, chunked prefill): ->    760 bit-exact  1.78 s at 100 MHz
+  chat pos  20: token    760: ->   8252 bit-exact  0.13 s at 100 MHz
+  chat pos  21: token   8252: ->   9447 bit-exact  0.13 s at 100 MHz
+  chat pos  22: token   9447: ->  16545 bit-exact  0.13 s at 100 MHz
+  chat pos  23: token  16545: ->    430 bit-exact  0.13 s at 100 MHz
+  chat pos  24: token    430: ->    264 bit-exact  0.13 s at 100 MHz
+  chat pos  25: token    264: ->  75098 bit-exact  0.13 s at 100 MHz
+  chat pos  26: token  75098: ->  58170 bit-exact  0.13 s at 100 MHz
+  chat pos  27: token  58170: ->    310 bit-exact  0.13 s at 100 MHz
+  chat pos  28: token    310: ->   3611 bit-exact  0.13 s at 100 MHz
+  chat pos  29: token   3611: ->   6537 bit-exact  0.13 s at 100 MHz
+  chat pos  30: token   6537: ->  86409 bit-exact  0.13 s at 100 MHz
+  chat: 31 positions in 3.7 s; expected output 'The Great Wall serves as a monumental testament to human ingenuity'
+  last step: rd_beats 7135633, wr_beats 1971632, bursts 1449934, rd_hazard 0, ar_wait 0, wr_wait 0, rd_wait 13602, cycles 13158396, rd_occupancy 498934572, rd_latency 69.9
+   PASS
+ALL PASS
