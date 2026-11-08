@@ -2,24 +2,25 @@
 
 <p align="center"><img src="demo/Qwen3.5-0.8B-Demo.gif" alt="Qwen3.5-0.8B chatting on the KV260" width="720"></p>
 
-An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B and Qwen3-0.6B bit-exact on a Xilinx
-Kria KV260**: every logit on the board matches the golden model bit for bit. Qwen3-0.6B decodes at
-**0.07 s/token** and Qwen3.5-0.8B at **0.13 s/token** on short contexts (100 MHz core clock, bitstream
-v3.3; 2.6 s/token at v1.0), using 90% of the XCK26's LUTs. Qwen3.5-0.8B also has optional speculative
-decoding with its MTP head (same tokens, bit for bit; see below).
+An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B, Qwen3-0.6B and Gemma 3 1B bit-exact on
+a Xilinx Kria KV260**: every logit on the board matches the golden model bit for bit. Qwen3-0.6B decodes
+at **0.07 s/token**, Gemma 3 1B at **0.09 s/token** and Qwen3.5-0.8B at **0.13 s/token** on short
+contexts (100 MHz core clock, bitstream v3.3; 2.6 s/token at v1.0), using 90% of the XCK26's LUTs.
+Qwen3.5-0.8B also has optional speculative decoding with its MTP head (same tokens, bit for bit; see below).
 
 **Demo:** Qwen3.5-0.8B chatting on the KV260 (above; full video: [demo/Qwen3.5-0.8B-Demo.mp4](demo/Qwen3.5-0.8B-Demo.mp4)).
 
 ## Tested models
 
-Both run on the same bitstream; only the exported model data differs. Measured on the
+All three run on the same bitstream; only the exported model data differs. Measured on the
 board, 100 MHz core clock, greedy decoding, every step's logits bit-exact against the golden model
-(`run.sh selftest`).
+(`run.sh <model> selftest`).
 
 | Model | Layers | Model image on the device (INT8 W8A8 weights + states) | Decode | Prefill (20-token prompt, chunks of 4) | Example chat (31 positions) |
 |---|---|---|---|---|---|
 | [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 24: 18 Gated DeltaNet + 6 gated full attention | 887 MiB | 13.2 M cycles = **0.13 s/token** | 1.78 s = 0.089 s/token | 3.7 s |
 | [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) | 28 full attention (GQA 16/8, QK-norm) | 662 MiB | 6.7 M cycles = **0.07 s/token** | 0.58 s = 0.029 s/token | 1.6 s |
+| [Gemma 3 1B](https://huggingface.co/google/gemma-3-1b-it) (it) | 26 attention (GQA 4/1, head 256, QK-norm; local / global RoPE 5:1), GeGLU | 1008 MiB | 9.4 M cycles = **0.09 s/token** | 0.68 s for 17 tokens = 0.040 s/token | 2.0 s (28 positions) |
 
 Decode slows as the context grows, because attention reads every earlier key and value. Measured on
 the board (`sw/ctx_bench.py`), in M cycles per token (1 M = 10 ms):
@@ -28,11 +29,32 @@ the board (`sw/ctx_bench.py`), in M cycles per token (1 M = 10 ms):
 |---|---|---|---|---|---|
 | Qwen3-0.6B (28 attention layers) | 6.71 | 7.31 | 8.12 | 8.91 | 9.51 |
 | Qwen3.5-0.8B (6 attention layers) | 13.16 | 13.25 | 13.37 | 13.48 | 13.57 |
+| Gemma 3 1B (26 attention layers, one KV head) | 9.39 | 9.59 | 9.84 | 10.10 | 10.34 |
 
 Qwen3.5's prefill is slower per token because its DeltaNet recurrence
 runs token by token; Qwen3's attention takes a chunk at once.
-Export a model with `tools/export_kv260.py --ckpt <checkpoint>` (the checkpoint's `model_type` picks
-the lowering); on the board, `sudo ./run.sh chat --data <its data directory>`.
+Export a model with `tools/export_kv260.py --ckpt <checkpoint> --out deploy/kv260/data_<name>` (the
+checkpoint's `model_type` picks the lowering). On the board, the first argument of `run.sh` picks the
+model: `sudo ./run.sh [qwen3.5|qwen3.5-mtp|qwen3|gemma3] [chat|selftest|quick|profile|...]`
+(default: Qwen3.5-0.8B, chat).
+
+## Gemma 3 1B
+
+Gemma 3 1B needed no RTL change, only the lowering, the export and the board runtime
+([details, in Chinese](docs/gemma3_1b/README.md)):
+
+- Its sliding window (512) is longer than the context (256), so every layer runs as full attention, with
+  the local or global RoPE table (base 1e4 / 1e6) of its layer type.
+- Four (1 + w) RMSNorms per layer, GeGLU (tanh GELU), and the attention scale 1/16 folded into q_norm.
+- `down_proj` has K = 6912, beyond the GEMV unit's 4096: it is quantized as one matrix and stored as
+  two K blocks sharing the per-channel scales; the partial sums add in fp32.
+- The host scales the bf16 embedding row by fp32(sqrt(1152)); the manifest carries the BOS token (once,
+  at position 0), the `<end_of_turn>` turn separator and the end tokens. The runtime's multi-turn token
+  sequence equals the official chat template.
+- T = 256 fits the 1 GB address space with 16 MiB to spare.
+
+W8A8 against the FP32 model (teacher-forced): top-1 agreement 84-89%, perplexity +3-5% (English
+17.69 to 18.53, Chinese 46.42 to 48.91). `sudo ./run.sh gemma3` starts a chat at about 10 tokens/s.
 
 ## Speculative decoding (MTP)
 
@@ -61,22 +83,36 @@ reads the 254 MB head as well. It breaks even at about 77% draft hits.
 | **Mean** | | | | **0.97x** (wall clock 0.95x) |
 
 To try it: `python tools/export_kv260.py --mtp --out deploy/kv260/data_mtp`, then on the board
-`sudo ./run.sh chat --data data_mtp --spec` (`sudo ./run.sh bench --data data_mtp` for the table above).
+`sudo ./run.sh qwen3.5-mtp chat --spec` (`sudo ./run.sh qwen3.5-mtp bench` for the table above).
+
+## Experiments: FP16 DeltaNet state and operator profiling
+
+- **FP16 DeltaNet state (bitstream v3.4, off by default).** `export_kv260.py --state-dtype fp16` stores
+  Qwen3.5's recurrent state as packed FP16, with all arithmetic still in FP32. On the board it was
+  bit-exact against its golden model but about 3% slower to decode, and about 10% of positions changed
+  their top-1 token, so the default stays FP32 and the shipped firmware stays v3.3
+  ([report](docs/fp16_state_v34/README.md)).
+- **Operator profiling.** `sudo ./run.sh profile --out p.json` reports read / write traffic and wait
+  counters per run; a bitstream built with `PROFILE_CAP` also splits the cycles by operator (GEMV, ELT,
+  FDOT, RoPE, norm, softmax, ...). Decode is read-bandwidth-bound: Gemma 3 1B reads at about 11 GB/s
+  ([method](docs/kv260_profiling.md), [v3.3 results](docs/profiling_v33/README.md)).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and the Qwen3.5 / Qwen3 lowering (`llm.py`) |
+| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and the Qwen3.5 / Qwen3 / Gemma 3 lowering (`llm.py`) |
 | `rtl/` | the core (SystemVerilog; FPGA changes under `` `ifdef TM_FPGA ``) and the KV260 top (`tm_kv260.sv`: AXI-Lite, 4-port 128 B read bridge, page table) |
 | `tests/`, `sim/` | RTL vs golden regressions (Verilator), random queue fuzz, board-like memory model |
 | `fpga/kv260/` | Vivado block design and build (`build.tcl`), device-tree overlay, packaging |
-| `deploy/kv260/` | board software (Kria Ubuntu 22.04): `run.sh`, `setup.sh`, chat and selftest (README in Chinese) |
+| `deploy/kv260/` | board software (Kria Ubuntu 22.04): `run.sh` (model as its first argument), `setup.sh`, chat, selftest and profiler (README in Chinese) |
 | `tools/export_kv260.py` | builds the board's model image from the Hugging Face checkpoint (not in git: ~1.5 GB) |
 | `docs/tars_kv260_history.html` | the project log: ASIC start, FPGA port, every version, lessons (Chinese) |
+| `docs/gemma3_1b/`, `docs/fp16_state_v34/`, `docs/profiling_v33/` | reports with the board logs (Chinese) |
 
 Quick start on the board: export the model data on a PC (`python tools/export_kv260.py --ckpt <Qwen3.5-0.8B>`),
-copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`.
+copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`. Other models' exports go
+next to `data/` (`data_qwen3/`, `data_gemma3/`, ...) and are chosen with `sudo ./run.sh <model>`.
 
 License: [Apache-2.0](LICENSE).
 
