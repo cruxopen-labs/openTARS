@@ -80,12 +80,16 @@ two bitstream changes:
   86-token prompt). Simulation: M=1, N=64, K=4096 takes 5,131 core cycles (64 bytes a cycle,
   7x the first narrow-read version). The contract adds K % 256 == 0, K <= 8192 and
   128-byte-aligned W offsets for W4 descriptors.
-  **The KV260 cannot hold both paths**: the W8A8 bitstream alone is 105,634 LUTs (90.2%) and the
-  W4 unit adds 13k, so the W4 image needs 120,193 LUTs (102.6%) and does not place. The bitstream
-  ships without it (VERSION 0x00040000 = 4 GB address space only); a W4 build reports 0x00040001
-  and the W4 export refuses to load on the current firmware instead of computing wrong numbers.
-  The area plan (elide the W8 GEMV, halve the multipliers, ring-buffer the X banks, or run W4 on
-  the GEMV datapath) is in [docs/gemma4_w4](docs/gemma4_w4/README.md).
+  **The KV260 cannot hold both paths** (measured, not estimated): the default W8A8 image is
+  107,964 LUTs after `opt_design` and 105,847 routed (WNS +0.029); the W4 image is 122,798
+  (104.9%) and `place_design` fails needing 10,302 CLBs against 8,461 available. `tm_w4` itself
+  is 15,613 (12,584 standalone: 2,990 of it is queue/FIFO/epilogue that `tm_xpu` already has,
+  9,594 is the W4-only datapath), and its 128 multipliers already sit in DSPs, so reusing the
+  GEMV array saves only ~0.4k LUTs. A W4-only image does not fit either (~121k, or ~115k with
+  the unit folded into `tm_xpu`). The bitstream ships without it (VERSION 0x00040000 = 4 GB
+  address space only); a W4 build reports 0x00040001 and the W4 export refuses to load on the
+  current firmware instead of computing wrong numbers. The measured levers (~7k still missing)
+  are in [docs/gemma4_w4](docs/gemma4_w4/README.md).
 
 The lowering maps the rest of the architecture with existing operators: per-layer embeddings (PLE)
 precomputed into the image (`ple_bf16.bin`), KV sharing for the last 20 layers, V-norm without
@@ -117,7 +121,7 @@ story, with the problems met at each step, is in the [project log](docs/tars_kv2
 | v3.3 | 2026-11-07 | FDOT at 16 products a cycle (4 lane banks, 128 B reads) | **0.13 s** (13.2 M); Qwen3-0.6B 0.07 s; Gemma 3 1B 0.09 s | 89.55% |
 | v3.3 + counters | 2026-11-08 | per-operator cycle counters (`PROFILE_CAP`), sampled logits identical (experimental) | first run 0.005-0.103% slower; one repeat 0.60% slower | 89.62% |
 | v3.4 | 2026-11-08 | optional packed FP16 DeltaNet state (experimental, not installed) | FP16 export 3% slower than FP32 on v3.4 | 90.50% |
-| **v4.0** (current) | 2026-11-14 | 4 GB address space (2,048-entry BRAM page table); the W4A16 GEMV unit (`tm_w4`, VERSION 0x00040001) is in the RTL but not in this bitstream (area) | W4: simulation only | TBD |
+| **v4.0** (current) | 2026-11-14 | 4 GB address space (2,048-entry BRAM page table); the W4A16 GEMV unit (`tm_w4`, VERSION 0x00040001) is in the RTL but not in this bitstream (area). Rebuilt 11-15 with the `W4X` wiring fix: 105,847 LUTs, WNS +0.029 | W4: simulation only | 90.37% |
 
 Model and software milestones on these bitstreams:
 

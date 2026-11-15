@@ -289,7 +289,7 @@ module tm_kv260_top #(
   logic [895:0]  mr_rhi;
   logic [15:0]   mw_strb;
   tm_core #(.R(R), .C(C), .MEM_BYTES(MEM_BYTES), .NB(NB), .OT(OT), .HB(HB), .VG(VG), .LG(LG), .OQ(OQ),
-            .VQMIN(VQMIN), .GB(GB), .RW(8), .ARR(0), .W4XD(64), .W4MB(1)) u_core (
+            .VQMIN(VQMIN), .GB(GB), .RW(8), .ARR(0), .W4XD(64), .W4MB(1), .W4X(W4X)) u_core (
     .clk, .rst(core_rst), .start(start_p), .q_addr, .q_len, .halted, .done, .err_code, .op_idx, .cycles, .profile_class,
     .mr_req, .mr_addr, .mr_wide, .mr_ready, .mr_rvalid, .mr_rdata, .mr_rhi,
     .mw_req, .mw_addr, .mw_data, .mw_strb, .mw_ready);
