@@ -1254,7 +1254,19 @@ module tm_w4 #(
 `endif
 
   // ------------------------------------------------------------ phase 1: fill and align
-  logic [127:0] RAW [2][32];                // a group's 128 fp32 values, 4 a word
+  // A group's 128 fp32 values, 4 a word, in two LUTRAM banks (even and odd words) so that the
+  // bf16 path's two words a beat are two banks' writes rather than two writes to one bank. The
+  // read is combinational (the align engine computes a word per cycle), which is why these are
+  // LUTRAMs and not registers: as a register file the 64-entry read mux cost 4.8k LUTs.
+  logic [127:0] raw_w0, raw_w1;
+  logic [4:0]   raw_wa;                     // a bank's entry ({parity, word[4:1]})
+  logic [4:0]   raw_ra;                     // the aligning group's word, same format
+  logic         raw_we;                     // the fill beat writes a word (a32: one bank, bf16: both)
+  logic [127:0] raw_rd;                     // the aligning group's word
+  logic [31:0]  raw_ra_a [1];               // tm_lutram's ports are arrays
+  logic [127:0] raw_rd0_a [1], raw_rd1_a [1];
+  assign raw_ra_a[0] = 32'(raw_ra);
+  assign raw_rd = aw[0] ? raw_rd1_a[0] : raw_rd0_a[0];
   logic [7:0]   remax;                      // the filling group's largest exponent
   logic         renan, reninf;
   logic [1:0]   f1_m;                       // the filling group's row / group
@@ -1287,6 +1299,13 @@ module tm_w4 #(
   logic [511:0] xrd4 [MB][NXB / 4];
   logic [31:0]  tot_g;
 
+  // the fill's words go into these two banks (a32: one bank a beat; bf16: both), the align engine
+  // reads one word a cycle through the combinational ports
+  tm_lutram #(.W(128), .D(32)) u_raw0 (.clk, .we(raw_we && (a32 ? !cabi[0] : 1'b1)),
+                                       .wa(32'(raw_wa)), .wd(raw_w0), .ra(raw_ra_a), .rd(raw_rd0_a));
+  tm_lutram #(.W(128), .D(32)) u_raw1 (.clk, .we(raw_we && (a32 ? cabi[0] : 1'b1)),
+                                       .wa(32'(raw_wa)), .wd(raw_w1), .ra(raw_ra_a), .rd(raw_rd1_a));
+
   always_comb begin
     mx = 8'd0; nn = 1'b0; ni = 1'b0;
     if (a32)
@@ -1308,9 +1327,17 @@ module tm_w4 #(
             : (mx8(remax, mx) == 8'd0) ? 32'h0 : (32'(ee) - 32'd13) << 23;
     // a fill beat may be taken when no group waits for the align and the aligning buffer is free
     fill_ok = !pend_v && !(al_busy && al_par == fp_par);
+    // the fill's word into RAW (a32: the beat's four values; bf16: the beat's two halves, one a bank)
+    raw_we = pop && qt_h[13:11] == K_A;
+    raw_wa = {fp_par, a32 ? cabi[4:1] : cabi[3:0]};
+    raw_w0 = a32 ? qd_h
+           : {qd_h[63:48], 16'b0, qd_h[47:32], 16'b0, qd_h[31:16], 16'b0, qd_h[15:0], 16'b0};
+    raw_w1 = a32 ? qd_h
+           : {qd_h[127:112], 16'b0, qd_h[111:96], 16'b0, qd_h[95:80], 16'b0, qd_h[79:64], 16'b0};
+    raw_ra = {al_par, aw[4:1]};
     pk = 64'd0;
     for (int i = 0; i < 4; i++)
-      pk[16 * i +: 16] = w4_mant(RAW[al_par][aw][32 * i +: 32], al_e, al_nan, al_inf);
+      pk[16 * i +: 16] = w4_mant(raw_rd[32 * i +: 32], al_e, al_nan, al_inf);
     xwe = al_busy && aw[0];
     xwm = al_m;
     xwb = aw[4:1];
@@ -1345,7 +1372,15 @@ module tm_w4 #(
   logic [63:0] c_ych;                       // the channel's first output byte
   logic [31:0] breg;                        // the channel's bias word
   logic [6:0]  sec;                         // scale beats taken (the pop's beat index)
-  logic [127:0] wsb [GB];                   // ... raw beats (the halves decode at a read)
+  // the channel's scale beats, raw (the halves decode at a read): a 128-entry LUTRAM, combinational
+  // read like the register array it replaces (as registers, its read mux was 0.8k LUTs)
+  logic        wsb_we;
+  logic [6:0]  wsb_ra;
+  logic [31:0] wsb_ra_a [1];
+  logic [127:0] wsb_rd_a [1];
+  assign wsb_ra_a[0] = 32'(wsb_ra);
+  tm_lutram #(.W(128), .D(GB)) u_wsb (.clk, .we(wsb_we), .wa(32'(sec)), .wd(qd_h),
+                                      .ra(wsb_ra_a), .rd(wsb_rd_a));
   logic [31:0] msc_rd [MB];                 // the rows' group scales (a BRAM each, read ahead)
   logic [LGS-1:0] msc_ra;
   logic        ms_we;
@@ -1385,6 +1420,8 @@ module tm_w4 #(
   assign pop = q_rcv != 0 && !drn && ((qt_h[13:11] == K_A) ? fill_ok
               : (qt_h[13:11] == K_W) ? ((GPB == 1) || !fire_d) : 1'b1);
   assign sclr = pop && qt_h[13:11] == K_S;
+  assign wsb_we = sclr;                                            // a scale beat into u_wsb
+  assign wsb_ra = 7'((32'(c_sabs[3:0]) + 2 * 32'(gq[0])) >> 4);     // the group's beat, read at T + 4
   assign ms_we = pop && qt_h[13:11] == K_A && qt_h[14];
   assign fire_w = (qt_h[13:11] == K_W) && pop;
   assign cw_last = qt_h[14];
@@ -1465,7 +1502,7 @@ module tm_w4 #(
     end
     // the term: i2f, the weight scale, the activation group's scale, into bank g % 4
     always_comb begin
-      wsb_v  = wsb[7'((32'(c_sabs[3:0]) + 2 * 32'(gq[0])) >> 4)];        // the group's beat
+      wsb_v  = wsb_rd_a[0];                                              // the group's beat
       wsh_h1 = 3'((32'(c_sabs[3:0]) + 2 * 32'(gq[0])) >> 1);             // its bytes' halfwords
       wsh_h2 = 3'((32'(c_sabs[3:0]) + 2 * 32'(gq[0]) + 1) >> 1);
       wsh    = {wsb_v[16 * 32'(wsh_h2) + 8 +: 8], wsb_v[16 * 32'(wsh_h1) +: 8]};
@@ -1563,13 +1600,7 @@ module tm_w4 #(
 
       // -------------------------------------------------------- phase 1: fill, close, align
       if (pop && qt_h[13:11] == K_A) begin
-        if (a32) RAW[fp_par][cabi] <= qd_h;
-        else begin
-          RAW[fp_par][{cabi[3:0], 1'b0}] <= {qd_h[63:48], 16'b0, qd_h[47:32], 16'b0,
-                                             qd_h[31:16], 16'b0, qd_h[15:0], 16'b0};
-          RAW[fp_par][{cabi[3:0], 1'b1}] <= {qd_h[127:112], 16'b0, qd_h[111:96], 16'b0,
-                                             qd_h[95:80], 16'b0, qd_h[79:64], 16'b0};
-        end
+        // the beat's word (a32) or words (bf16) go into RAW through its write port (see raw_w0/w1)
         remax <= mx8(remax, mx); renan <= renan || nn; reninf <= reninf || ni;
         if (qt_h[14]) begin                      // the group's last beat: close it
           // The align engine may finish its group on this same cycle; chain the new group onto
@@ -1649,7 +1680,7 @@ module tm_w4 #(
       // -------------------------------------------------------- phase 2: the consumer
       if (pop && qt_h[13:11] == K_S) begin
         c_soff <= c_soff + 32'sd16;
-        wsb[sec] <= qd_h; sec <= sec + 7'd1;
+        sec <= sec + 7'd1;
       end
       if (pop && qt_h[13:11] == K_B) breg <= qd_h[32 * 32'(cn[1:0]) +: 32];
       fire_d <= fire_w; fw1 <= fire_d;
