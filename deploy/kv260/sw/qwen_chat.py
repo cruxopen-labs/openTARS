@@ -36,7 +36,8 @@ def main() -> int:
     tk = Tokenizer.from_file(str(d / "tokenizer.json"))
     name = json.loads((d / "manifest.json").read_text()).get("model", "the model")
     print(f"TARS-mini on KV260: loading {name} ...", flush=True)
-    dev = B.Golden() if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga()   # golden: a PC check
+    mb = B.manifest_mem(d)
+    dev = B.Golden(mem=mb) if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga(mem_bytes=mb)   # golden: a PC check
     m = B.Qwen(dev, d)
     eos = set(m.m["eos_ids"])
     print(f"ready. context {m.T} tokens. /reset = new conversation, /quit = exit\n", flush=True)

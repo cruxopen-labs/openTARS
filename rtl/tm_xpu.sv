@@ -1027,3 +1027,648 @@ module tm_xpu #(
   end
 
 endmodule
+
+// ------------------------------------------------------------------ W4A16 GEMM unit (tm_w4)
+// OP_GEMM with QM_GROUP, DT_INT4 weights and FP32 / BF16 activations (contract v0.4's W4A16).
+//
+// Phase 1 loads each activation row group by group (FP32: 32 narrow beats a group; BF16: 16, each
+// halfword expanded << 16 to fp32) into a double buffer, tracks the group's largest exponent and
+// its NaN / infinity flags, then aligns every value to that exponent (signed INT16 mantissas,
+// RNE right shift by 10 + emax_eff - exponent) into per-row banked memories and latches the
+// group's FP32 scale (biased exponent emax_eff - 13; a NaN group: all mantissas 0 and canonical
+// NaN; an infinity group: the infinities +/- 16384 and +infinity scale; all zero / subnormal: 0).
+// Phase 2 streams the packed INT4 weight rows (low nibble even k, high nibble odd k) one whole
+// 128-byte wide beat at a time (the W8 GEMV's read width: RW / 4 whole groups of a channel a
+// beat), the channel's binary16 scale row (a non 16-byte-aligned 2 * K / 128-byte row read from
+// its floor beat) and the channel's bias word, runs one 128-value group's dot products a cycle
+// for all rows (128 INT4 x INT16 products into an exact 27-bit group dot), and runs the
+// contract's epilogue in its exact order on a shared lane: term = fmul(fmul(i2f(dot), wscale),
+// xscale) into four per-row banks (group g % 4), then fadd(fadd(b0, b1), fadd(b2, b3)), the
+// bias, the activation and the output conversion. Every output takes an output-queue slot at
+// its launch (one a cycle, M per channel) and emerges lat cycles later (the extension unit's
+// convention).
+module tm_w4 #(
+  parameter int VQ = 128,                 // reads in flight / buffered (power of two)
+  parameter int RB = 64,                  // output segment bytes
+  parameter int MB = 4,                   // rows per pass (the core splits M > MB into passes)
+  parameter int RW = 8,                   // W read width: 16 RW bytes a beat (4 or 8; a wide beat
+                                          // holds RW/4 whole groups, K % (64 RW) must be 0)
+  parameter int XD = 512                  // X bank depth: groups held (K / 128)
+) (
+  input  logic         clk,
+  input  logic         rst,
+  // descriptor (held while busy)
+  input  logic         start,
+  input  logic         bias,              // bias at b_base
+  input  logic [2:0]   act,
+  input  logic [1:0]   out,               // 0 fp32, 1 bf16, 2 int8
+  input  logic [31:0]  osc,
+  input  logic         a32,               // the activations are FP32 (else BF16, expanded << 16)
+  input  logic [31:0]  m_n, n_n, k_n,     // M (this pass), N, K
+  input  logic [63:0]  a_base, w_base, y_base, s_base, b_base,
+  input  logic [31:0]  lda, ldy,
+  output logic         busy,
+  output logic [31:0]  lat,               // launch-to-data latency of this descriptor
+  // reads (returns in order)
+  output logic         rq_go,
+  output logic [63:0]  rq_addr,
+  output logic         rq_wide,           // RW > 1: this request is a 16 RW-byte one
+  input  logic         rq_ready,
+  input  logic         rq_ret,
+  input  logic [127:0] rq_data,
+  input  logic [128*(RW > 1 ? RW - 1 : 1)-1:0] rq_hi,
+  // output queue
+  input  logic         oq_free,
+  output logic         lq_go,
+  output logic [63:0]  lq_addr,
+  output logic [31:0]  lq_len,
+  output logic [8*RB-1:0] x_row           // the entry launched lat + 1 cycles ago
+`ifdef TM_FPGA
+  // the core's shared SFU (tm_sfu.sv): the long activations' inputs and results; the short ones
+  // stay in this unit's fpu_act1
+  , output logic [31:0] sfu_x
+  , input  logic [31:0] sfu_y
+`endif
+);
+  import tm_fp_pkg::*;
+
+  localparam int LQ  = $clog2(VQ);
+  localparam int RW4 = (RW < 4) ? 4 : RW;  // the beat registers' width (the core build's RW = 1
+                                           // never issues wide W requests and runs no W4
+                                           // descriptors; the unit still elaborates)
+  localparam int GPB = RW4 / 4;            // groups per wide W beat (RW / 4; the consumer runs one
+                                           // group a cycle, so a beat pops every GPB cycles)
+  localparam int LW  = 5 + $clog2(RW4);    // W beats per channel: K / (2 * 16 RW) = k_n >> LW
+  localparam int NXB = 16;                 // X banks per row (a bank holds one beat of a group)
+  localparam int GS  = 512;                // group scales held: K / 128
+  localparam int GB  = 128;                // scale beat registers: (K / 128) / 8 + slack
+  localparam int LXD = $clog2(XD);
+  localparam int LGS = $clog2(GS);
+  localparam int LMB = (MB > 1) ? $clog2(MB) : 1;
+  localparam logic [2:0] K_A = 3'd0, K_S = 3'd1, K_B = 3'd2, K_W = 3'd3;
+
+  // per-descriptor constants
+  logic [31:0] es, cl, act_l, lat_c, twog, gn, ab;
+  logic        long_act, sp_act;
+  always_comb begin
+    es       = (out == 2'd0) ? 32'd4 : (out == 2'd2) ? 32'd1 : 32'd2;
+    cl       = (out == 2'd0) ? 32'd0 : (out == 2'd2) ? 32'd4 : 32'd1;
+    long_act = act == 3'd3 || act == 3'd4 || act == 3'd5 || act == 3'd7;
+    sp_act   = act == 3'd6;
+    act_l    = long_act ? 32'd122 : sp_act ? 32'(tm_fp_pkg::SP_LAT) : 32'd1;
+    lat_c    = act_l + cl;
+    twog     = 32'(k_n) >> 6;              // the scale row's bytes (K a multiple of 128)
+    gn       = 32'(k_n) >> 7;              // groups per row
+    ab       = a32 ? (32'(k_n) >> 2) : (32'(k_n) >> 3);   // A beats per row
+  end
+  always_ff @(posedge clk) lat <= lat_c;   // descriptor constant: registered (the core's tap select)
+
+  function automatic logic [7:0] mx8(input logic [7:0] a, input logic [7:0] b);
+    return (a > b) ? a : b;
+  endfunction
+
+  // The aligned INT16 mantissa of one value (the group's exponent efx and its NaN / infinity
+  // flags): a subnormal (exp 0) is zero, a shift of 25 or more is zero, an infinity of an
+  // infinity group is 16384, a NaN group is all zero; the sign applies last.
+  function automatic logic [15:0] w4_mant(input logic [31:0] x, input logic [7:0] efx,
+                                          input logic gnan, input logic ginf);
+    logic [7:0]  e;
+    logic [22:0] f;
+    logic [8:0]  sh;
+    logic [24:0] u, base, rem, half, r;
+    logic [15:0] mag;
+    e    = x[30:23];
+    f    = x[22:0];
+    sh   = 9'd10 + 9'(efx) - 9'(e);                     // >= 10 (efx is the group's largest)
+    u    = 25'({1'b1, f});
+    base = u >> (sh >= 9'd25 ? 5'd24 : sh[4:0]);
+    rem  = (sh >= 9'd25) ? 25'd0 : u & ((25'd1 << sh[4:0]) - 25'd1);
+    half = 25'd1 << (sh[4:0] - 5'd1);
+    r    = base + ((rem > half || (rem == half && base[0])) ? 25'd1 : 25'd0);
+    mag  = (e == 8'd0 || sh >= 9'd25 || e == 8'hff) ? 16'd0 : r[15:0];
+    if (ginf && e == 8'hff && f == 23'd0) mag = 16'd16384;
+    if (gnan) mag = 16'd0;
+    return x[31] ? -mag : mag;
+  endfunction
+
+  // a row m of a small block row offset (no multiply)
+  function automatic logic [63:0] rowoff(input logic [1:0] m, input logic [31:0] ld);
+    case (m)
+      2'd1:    return 64'(ld);
+      2'd2:    return 64'(ld) << 1;
+      2'd3:    return (64'(ld) << 1) + 64'(ld);
+      default: return 64'd0;
+    endcase
+  endfunction
+
+  // ------------------------------------------------------------ reader, FIFO
+  logic [1:0]  ph;                          // 0: load and align A; 1: the channels
+  logic        a_run, w_run;                // the phase still has beats to issue
+  logic [1:0]  p1_m;                        // phase 1: row
+  logic [LGS-1:0] p1_g;                     // ... group within the row
+  logic [15:0] p1_b;                        // beat within the row
+  logic [63:0] p1_row;                      // the row's first beat
+  logic [15:0] rn;                          // phase 2: channel
+  logic [1:0]  rsub;                        // 0 scale, 1 bias, 2 W
+  logic [31:0] rsec;                        // scale beats issued
+  logic [15:0] rwb;                         // W beats issued
+  logic [63:0] r_sabs, r_sbeat, r_wrow, r_wbeat, nx_rs;
+  logic        cv, rds, wadv;
+  logic [63:0] a_addr, c_addr;              // the walker's beat; the candidate register
+  logic [2:0]  a_kind, c_kind;
+  logic [8:0]  a_cg, c_cg;                  // ... its group (W beats)
+  logic [1:0]  a_biw, c_biw;                // ... and sub-beat
+  logic        a_last, c_last;
+  logic [14:0] qt_w, qt_h;                  // {last, kind, group, sub-beat}
+  logic [LQ-1:0] q_t, q_r, q_h;
+  logic [LQ:0] cnt, q_rcv;
+  logic [127:0] qd_h;
+  logic [128*(RW4 - 1)-1:0] qh_h;          // the head beat's upper bytes
+  // the wide beat's upper bytes, zero-padded on the RW = 1 core build (it never drives mr_wide)
+  logic [128*(RW4 - 1)-1:0] rq_hi_x;
+  if (RW4 == RW) begin : g_hiw
+    assign rq_hi_x = rq_hi;
+  end else begin : g_hiz
+    logic [128*(RW > 1 ? RW - 1 : 1)-1:0] unused_hi;
+    assign unused_hi = rq_hi;
+    assign rq_hi_x = '0;
+  end
+  logic [128*RW4-1:0] wreg;                 // the popped W beat's weights (the products run a
+                                            // ... cycle later, with the X banks' read caught up)
+  logic        fire_d;                      // the popped W beat's first product cycle
+  logic        fw1;                         // fire_d delayed 1 (the beat's second group, GPB = 2)
+  logic        sclr;                        // a channel's scale beats: clear the group banks
+  logic        rd_go;
+  logic [31:0] nbs;                         // the channel's scale row's beats (floor aligned)
+
+  always_comb begin
+    nbs = (32'(r_sabs[3:0]) + twog + 32'd15) >> 4;
+    // the candidate: the beat the walker is on
+    a_kind = K_A; a_addr = 64'd0; a_last = 1'b0;
+    if (ph == 2'd0) begin
+      a_kind = K_A;
+      a_addr = p1_row + {48'b0, p1_b, 4'b0};
+      a_last = a32 ? (p1_b[4:0] == 5'd31) : (p1_b[3:0] == 4'd15);
+    end else if (rsub == 2'd0) begin
+      a_kind = K_S; a_addr = r_sbeat;
+      a_last = rsec + 32'd1 >= nbs;
+    end else if (rsub == 2'd1) begin
+      a_kind = K_B; a_addr = b_base + {44'b0, rn[15:2], 4'b0}; a_last = 1'b1;
+    end else begin
+      a_kind = K_W; a_addr = r_wbeat;
+      a_last = 32'(rwb) + 32'd1 >= (32'(k_n) >> LW);
+    end
+    a_cg  = 9'd0; a_biw = 2'd0;
+    if (a_kind == K_W) begin a_cg = 9'(32'(rwb) << (GPB == 2)); a_biw = 2'd0; end
+    rd_go   = cv && cnt < (LQ + 1)'(VQ);
+    rq_go   = rd_go;
+    rq_wide = c_kind == K_W;
+    rq_addr = c_addr;
+  end
+  assign rds  = rd_go && rq_ready;
+  assign wadv = ((ph == 2'd0) ? a_run : w_run) && (!cv || rds);
+  assign qt_w = {c_last, c_kind, c_cg, c_biw};   // the candidate's tag (the beat the port accepts)
+
+`ifdef TM_FPGA
+  logic [31:0]  q_ra [1];
+  logic [14:0]  qt_rd [1];
+  logic [127:0] qd_rd [1];
+  logic [128*(RW4 - 1)-1:0] qh_rd [1];
+  assign q_ra[0] = 32'(q_h);
+  tm_lutram #(.W(15), .D(VQ), .NR(1)) u_qt (.clk, .we(rds && !rst), .wa(32'(q_t)), .wd(qt_w),
+                                           .ra(q_ra), .rd(qt_rd));
+  tm_lutram #(.W(128), .D(VQ), .NR(1)) u_qd (.clk, .we(rq_ret && !rst), .wa(32'(q_r)), .wd(rq_data),
+                                             .ra(q_ra), .rd(qd_rd));
+  tm_lutram #(.W(128 * (RW4 - 1)), .D(VQ), .NR(1)) u_qh (.clk, .we(rq_ret && !rst), .wa(32'(q_r)),
+                                                        .wd(rq_hi_x), .ra(q_ra), .rd(qh_rd));
+  assign qt_h = qt_rd[0];
+  assign qd_h = qd_rd[0];
+  assign qh_h = qh_rd[0];
+`else
+  logic [14:0]  qt [VQ];
+  logic [127:0] qd [VQ];
+  logic [128*(RW4 - 1)-1:0] qh [VQ];
+  assign qt_h = qt[q_h];
+  assign qd_h = qd[q_h];
+  assign qh_h = qh[q_h];
+`endif
+
+  // ------------------------------------------------------------ phase 1: fill and align
+  logic [127:0] RAW [2][32];                // a group's 128 fp32 values, 4 a word
+  logic [7:0]   remax;                      // the filling group's largest exponent
+  logic         renan, reninf;
+  logic [1:0]   f1_m;                       // the filling group's row / group
+  logic [LGS-1:0] f1_g;
+  logic [4:0]   cabi;                       // A beats taken of the group
+  logic         fp_par;                     // the filling buffer
+  logic         fill_ok;                    // a fill beat may be taken
+  logic [7:0]   mx;                         // the pop's exponent max, NaN / infinity flags
+  logic         nn, ni;
+  logic [7:0]   ee;                         // the closing group's emax_eff
+  logic         inf_eff;
+  logic [31:0]  sc;                         // ... its scale
+  logic         al_busy, pend_v;
+  logic         al_new;                     // a group closing now starts the align engine
+  logic [5:0]   aw;                         // the aligning group's word
+  logic [7:0]   al_e, pd_e;
+  logic         al_nan, al_inf, pd_nan, pd_inf, al_par, pd_par;
+  logic [1:0]   al_m, pd_m;
+  logic [LGS-1:0] al_g, pd_g;
+  logic [31:0]  al_cnt;                     // groups aligned
+  logic [63:0]  ahold;
+  logic [63:0]  pk;
+  logic         xwe;
+  logic [LMB-1:0] xwm;
+  logic [3:0]   xwb;
+  logic [LXD-1:0] xwa;
+  logic [127:0] xwd;
+  logic [LXD-1:0] xra [MB][NXB];
+  logic [127:0] xrd [MB][NXB];
+  logic [511:0] xrd4 [MB][NXB / 4];
+  logic [31:0]  tot_g;
+
+  always_comb begin
+    mx = 8'd0; nn = 1'b0; ni = 1'b0;
+    if (a32)
+      for (int i = 0; i < 4; i++) begin
+        mx = mx8(mx, qd_h[32 * i + 30 -: 8]);
+        if (qd_h[32 * i + 30 -: 8] == 8'hff)
+          if (qd_h[32 * i +: 23] != 23'd0) nn = 1'b1; else ni = 1'b1;
+      end
+    else
+      for (int i = 0; i < 8; i++) begin
+        mx = mx8(mx, qd_h[16 * i + 14 -: 8]);
+        if (qd_h[16 * i + 14 -: 8] == 8'hff)
+          if (qd_h[16 * i +: 7] != 7'd0) nn = 1'b1; else ni = 1'b1;
+      end
+    // the closing group's exponent max and flags include the last beat's
+    ee      = mx8(mx8(remax, mx), 8'd14);
+    inf_eff = (reninf || ni) && !(renan || nn);
+    sc      = (renan || nn) ? CANON_NAN : inf_eff ? 32'h7F800000
+            : (mx8(remax, mx) == 8'd0) ? 32'h0 : (32'(ee) - 32'd13) << 23;
+    // a fill beat may be taken when no group waits for the align and the aligning buffer is free
+    fill_ok = !pend_v && !(al_busy && al_par == fp_par);
+    pk = 64'd0;
+    for (int i = 0; i < 4; i++)
+      pk[16 * i +: 16] = w4_mant(RAW[al_par][aw][32 * i +: 32], al_e, al_nan, al_inf);
+    xwe = al_busy && aw[0];
+    xwm = al_m;
+    xwb = aw[4:1];
+    xwa = al_g;
+    xwd = {pk, ahold};
+    tot_g = 32'(m_n) * gn;
+  end
+
+  // X: the aligned values, per row 16 lane banks (beat b of a group in bank b, address = the
+  // group). Four lanes share one 512-bit word: a 128-bit-wide memory would spend a whole RAMB18
+  // per lane bank (the device has room for four of these words, not sixteen separate banks).
+  for (genvar mm = 0; mm < MB; mm++) begin : g_xr
+    for (genvar g4 = 0; g4 < NXB / 4; g4++) begin : g_xw
+      tm_bramm #(.W(512), .D(XD)) u_x (.clk,
+        .we(xwe && 32'(xwm) == mm && 32'(xwb[3:2]) == g4),
+        .ws(64'h0000_0000_0000_FFFF << (16 * 32'(xwb[1:0]))), .wa(xwa), .wd({4{xwd}}),
+        .ra(xra[mm][4 * g4]), .rd(xrd4[mm][g4]));
+    end
+    for (genvar bb = 0; bb < NXB; bb++) begin : g_xb
+      assign xrd[mm][bb] = xrd4[mm][bb[3:2]][128 * 32'(bb[1:0]) +: 128];
+    end
+  end
+
+  // ------------------------------------------------------------ phase 2: the consumer
+  logic        fire_w;                      // a W beat pops now
+  logic        cw_last;                     // ... and it is the channel's last
+  logic        prod;                        // a group's products run now (every cycle while a
+                                            // ... beat's groups are consumed; pops every GPB)
+  logic [15:0] cn;                          // the channel
+  logic [63:0] c_sabs;                      // the channel's first scale byte
+  logic signed [31:0] c_soff;              // the popped beat's first byte from it
+  logic [63:0] c_ych;                       // the channel's first output byte
+  logic [31:0] breg;                        // the channel's bias word
+  logic [6:0]  sec;                         // scale beats taken (the pop's beat index)
+  logic [127:0] wsb [GB];                   // ... raw beats (the halves decode at a read)
+  logic [31:0] msc_rd [MB];                 // the rows' group scales (a BRAM each, read ahead)
+  logic [LGS-1:0] msc_ra;
+  logic        ms_we;
+  logic        drn;                        // a channel's dot sums are landing; no pops until its
+  logic [7:0]  dw;                         // launches are done
+  logic [LMB:0] rr;                         // rows launched (one wider than the row index)
+  logic [LMB-1:0] lp;                       // the launching row
+  logic        lq_r;                       // the launch register (a one-cycle pulse)
+  logic        can_l;                      // a launch may be decided
+  logic signed [31:0] acc [MB][4];         // the rows' four group banks
+  logic [31:0] gv [MB];                    // the rows' act inputs (the issue registers)
+  logic [31:0] fa [MB], fb [MB], fs [MB], by [MB], y0d [MB];
+  logic [31:0] act_in, act_y1;
+`ifndef TM_FPGA
+  logic [31:0] act_yl, act_ys;
+`endif
+  logic [31:0] cv_in, cv_yq;
+  logic [15:0] cv_bf;
+  logic [7:0]  cv_q8;
+  logic [8*RB-1:0] cv_row;
+  logic        wp;                          // a group's term lands now (13 after its product cycle)
+  logic [1:0]  wpb;                         // ... the bank it lands in
+  logic [63:0] nx_cabs;
+  logic [15:0] nx_c;
+  assign nx_cabs = c_sabs + 64'(twog);
+  assign nx_c    = 16'(32'(cn) + 32'd1);
+  // the rows' group scales (written at a group's close, read a cycle ahead of their use)
+  for (genvar mm = 0; mm < MB; mm++) begin : g_ms
+    tm_bram #(.W(32), .D(GS)) u_ms (.clk, .we(ms_we && 32'(f1_m) == mm && !rst),
+                                    .wa(32'(f1_g)), .wd(sc), .ra(msc_ra), .rd(msc_rd[mm]));
+  end
+  assign nx_rs   = r_sabs + 64'(twog);
+  // the head's pop: a fill beat when its buffer is free; a W beat when the previous beat's groups
+  // are consumed (a pop every GPB cycles); everything waits while a channel's sums land and
+  // launch (the next channel's scale / bias beats would overwrite ws and breg)
+  logic pop;
+  assign pop = q_rcv != 0 && !drn && ((qt_h[13:11] == K_A) ? fill_ok
+              : (qt_h[13:11] == K_W) ? ((GPB == 1) || !fire_d) : 1'b1);
+  assign sclr = pop && qt_h[13:11] == K_S;
+  assign ms_we = pop && qt_h[13:11] == K_A && qt_h[14];
+  assign fire_w = (qt_h[13:11] == K_W) && pop;
+  assign cw_last = qt_h[14];
+  // A group closing while the align engine finishes its current word chain starts the next
+  // alignment; the sequential close branch and the engine's clear must agree on this.
+  assign al_new = pop && qt_h[13:11] == K_A && qt_h[14] &&
+                  (!al_busy || aw == 6'd31) && !pend_v;
+  assign prod = fire_d || (fw1 && GPB != 1);
+  logic [8:0] pend_cg;                     // the group the current products belong to
+  logic [511:0] whalf;                     // the products' half of the beat (the low half at a
+                                           // ... pop's first product cycle, the high at the second)
+  if (GPB == 2) begin : g_wh
+    always_comb whalf = fire_d ? wreg[511:0] : wreg[1023:512];
+  end else begin : g_wh
+    always_comb whalf = wreg[511:0];
+  end
+
+  // the products' group, pipelined to its users (gq[k] during T + 1 + k for a product cycle T)
+  logic [8:0] gq [10];
+  always_ff @(posedge clk) begin
+    gq[0] <= prod ? pend_cg : gq[0];
+    for (int k = 1; k < 10; k++) gq[k] <= gq[k - 1];
+  end
+  logic [8:0] msc_ra_r;                    // the term's group's scale: u_m2 samples msc_rd at
+                                           // ... T + 4; the address registers two cycles after the
+                                           // ... product cycle (gq[1] then holds the group whether
+                                           // ... or not the beat stream had a gap)
+  logic msc_ld;
+  fpu_dly #(1, 2) u_ml (.clk, .d(prod), .q(msc_ld));
+  always_ff @(posedge clk) begin
+    if (rst) msc_ra_r <= 9'd0;
+    else if (msc_ld) msc_ra_r <= gq[1];
+  end
+  assign msc_ra = msc_ra_r;
+  // the X banks' read address: the group whose products run next cycle (a pop's beat: its first
+  // group; a prod cycle's next group: pend_cg + 1)
+  always_comb begin
+    for (int mm = 0; mm < MB; mm++)
+      for (int bb = 0; bb < NXB; bb++)
+        xra[mm][bb] = fire_w ? LXD'(qt_h[10:2])
+                    : prod   ? LXD'(32'(pend_cg) + (GPB > 1))
+                             : LXD'(pend_cg);
+  end
+  // ------------------------------------------------------------ per-row dot products
+  fpu_dly #(1, 13) u_wp (.clk, .d(prod), .q(wp));
+  fpu_dly #(2, 13) u_wpb (.clk, .d(pend_cg[1:0]), .q(wpb));   // the group's bank (g % 4)
+  for (genvar mm = 0; mm < MB; mm++) begin : g_dp
+    logic signed [15:0] xv [128];
+    (* use_dsp = "yes" *) logic signed [31:0] prd [128];  // 16 x 4 products: on the DSPs, not LUTs
+    logic signed [26:0] p2 [16], p3 [4], p4 [2], tot;
+    logic        is, iz;
+    logic [31:0] iu, f0, m1y, m2y, m2d, ay;
+    logic [127:0] wsb_v;
+    logic [15:0]  wsh;
+    logic [2:0]   wsh_h1, wsh_h2;
+    logic [31:0]  ws_g;
+    always_comb begin
+      for (int i = 0; i < 128; i++) begin
+        logic [3:0] nib;
+        nib = i[0] ? whalf[8 * (i >> 1) + 4 +: 4] : whalf[8 * (i >> 1) +: 4];
+        xv[i] = 16'(xrd[mm][i[6:3]][16 * 32'(i[2:0]) +: 16]);
+        prd[i] = $signed(xv[i]) * $signed({{28{nib[3]}}, nib});
+      end
+      for (int j = 0; j < 16; j++)
+        p2[j] = 27'(prd[8 * j]) + prd[8 * j + 1] + prd[8 * j + 2] + prd[8 * j + 3]
+              + prd[8 * j + 4] + prd[8 * j + 5] + prd[8 * j + 6] + prd[8 * j + 7];
+      for (int j = 0; j < 4; j++)
+        p3[j] = p2[4 * j] + p2[4 * j + 1] + p2[4 * j + 2] + p2[4 * j + 3];
+      p4[0] = p3[0] + p3[1];
+      p4[1] = p3[2] + p3[3];
+      tot = p4[0] + p4[1];
+      f0  = iz ? 32'h0 : i2f_tail(is, iu);
+    end
+    always_ff @(posedge clk) begin
+      if (prod) begin
+        is <= tot[26]; iz <= tot == 0; iu <= tot[26] ? 27'(-tot) : tot;
+      end
+    end
+    // the term: i2f, the weight scale, the activation group's scale, into bank g % 4
+    always_comb begin
+      wsb_v  = wsb[7'((32'(c_sabs[3:0]) + 2 * 32'(gq[0])) >> 4)];        // the group's beat
+      wsh_h1 = 3'((32'(c_sabs[3:0]) + 2 * 32'(gq[0])) >> 1);             // its bytes' halfwords
+      wsh_h2 = 3'((32'(c_sabs[3:0]) + 2 * 32'(gq[0]) + 1) >> 1);
+      wsh    = {wsb_v[16 * 32'(wsh_h2) + 8 +: 8], wsb_v[16 * 32'(wsh_h1) +: 8]};
+      ws_g   = from_fp16(wsh);
+    end
+    fpu_dly #(32, 3) u_td (.clk, .d(m2y), .q(m2d));    // the term, 3 cycles on: the accumulator's
+                                                       // ... bank was rewritten by group g - 4 at T + 9
+    fpu_mul u_m1 (.clk, .a(f0), .b(ws_g), .y(m1y));
+    fpu_mul u_m2 (.clk, .a(m1y), .b(msc_rd[mm]), .y(m2y));
+    fpu_add u_a (.clk, .a(acc[mm][gq[9][1:0]]), .b(m2d), .y(ay));
+    always_ff @(posedge clk) begin
+      if (start) begin acc[mm][0] <= 32'h0; acc[mm][1] <= 32'h0; acc[mm][2] <= 32'h0; acc[mm][3] <= 32'h0; end
+      else if (sclr) begin acc[mm][0] <= 32'h0; acc[mm][1] <= 32'h0; acc[mm][2] <= 32'h0; acc[mm][3] <= 32'h0; end
+      else if (wp) acc[mm][wpb] <= 32'(ay);    // a channel's groups land here; the scale beats clear
+    end
+  end
+
+  // ------------------------------------------------------------ the epilogue lane (shared)
+  // The rows' four group banks fold (one adder pair a row, all in parallel), then the contract's
+  // order: the bias, the activation, the conversion. The chains run continuously; a row's values
+  // settle 10 cycles after its banks are final and stay until the next channel overwrites them.
+  for (genvar mm = 0; mm < MB; mm++) begin : g_fold
+    fpu_add u_fa (.clk, .a(acc[mm][0]), .b(acc[mm][1]), .y(fa[mm]));
+    fpu_add u_fb (.clk, .a(acc[mm][2]), .b(acc[mm][3]), .y(fb[mm]));
+    fpu_add u_fs (.clk, .a(fa[mm]), .b(fb[mm]), .y(fs[mm]));
+    fpu_dly #(32, 3) u_y0 (.clk, .d(fs[mm]), .q(y0d[mm]));
+    fpu_add u_by (.clk, .a(fs[mm]), .b(breg), .y(by[mm]));
+    always_ff @(posedge clk) gv[mm] <= bias ? by[mm] : y0d[mm];
+  end
+  assign act_in = gv[lp];
+`ifdef TM_FPGA
+  assign sfu_x = act_in;
+  fpu_act1 u_act (.clk, .x(act_in), .act, .y1(act_y1));
+  assign cv_in = long_act ? sfu_y : sp_act ? sfu_y : act_y1;
+`else
+  fpu_act u_act (.clk, .x(act_in), .act, .y1(act_y1), .ylong(act_yl), .ysp(act_ys));
+  assign cv_in = long_act ? act_yl : sp_act ? act_ys : act_y1;
+`endif
+  fpu_mul u_q (.clk, .a(cv_in), .b(osc), .y(cv_yq));
+  always_comb begin
+    cv_row = '0;
+    if (out == 2'd0) cv_row[31:0] = cv_in;
+    else if (out == 2'd1) cv_row[15:0] = cv_bf;
+    else cv_row[7:0] = cv_q8;
+  end
+  always_ff @(posedge clk) begin
+    cv_bf <= to_bf16(cv_in);
+    cv_q8 <= q8_tail(cv_yq);
+    x_row <= (8 * RB)'(cv_row);
+  end
+
+  // ------------------------------------------------------------ control
+  assign can_l   = drn && dw == 8'd0 && 32'(rr) < 32'(m_n);
+  assign lq_go   = lq_r;
+  assign lq_addr = c_ych + rowoff(lp, ldy);
+  assign lq_len  = es;
+  logic        ph2_go;                     // the phase-2 handoff (this cycle)
+  assign ph2_go  = (ph == 2'd0) && !a_run && cnt == 0 && q_rcv == 0 && !al_busy && !pend_v &&
+                   al_cnt == tot_g && tot_g != 32'd0;   // the phase-2 handoff (this cycle)
+  assign busy    = ((ph == 2'd0) ? a_run : w_run) || cv || cnt != 0 || q_rcv != 0 ||
+                   al_busy || pend_v || drn || ph2_go;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      cv <= 1'b0; cnt <= 0; q_rcv <= 0; q_t <= 0; q_r <= 0; q_h <= 0;
+      ph <= 2'd0; a_run <= 1'b0; w_run <= 1'b0; al_busy <= 1'b0; pend_v <= 1'b0;
+      drn <= 1'b0; dw <= 8'd0; rr <= '0; fp_par <= 1'b0;
+      remax <= 8'd0; renan <= 1'b0; reninf <= 1'b0; rsub <= 2'd0;
+      fire_d <= 1'b0; fw1 <= 1'b0; lq_r <= 1'b0; pend_cg <= 9'd0;
+    end else begin
+      // -------------------------------------------------------- reader, FIFO
+      if (rq_ret) begin
+`ifndef TM_FPGA
+        qd[q_r] <= rq_data;
+        qh[q_r] <= rq_hi_x;
+`endif
+        q_r <= q_r + 1'b1;
+      end
+      if (rds) begin
+`ifndef TM_FPGA
+        qt[q_t] <= qt_w;
+`endif
+        q_t <= q_t + 1'b1;
+      end
+      cnt   <= cnt + (LQ + 1)'(rds) - (LQ + 1)'(pop);
+      q_rcv <= q_rcv + (LQ + 1)'(rq_ret) - (LQ + 1)'(pop);
+      if (pop) q_h <= q_h + LQ'(1);
+
+      // the candidate register (the walker's beat goes out)
+      if (start) cv <= 1'b0;
+      else if (wadv) begin
+        cv <= 1'b1; c_addr <= a_addr; c_kind <= a_kind; c_last <= a_last;
+        c_cg <= a_cg; c_biw <= a_biw;
+      end else if (rds) cv <= 1'b0;
+
+      // -------------------------------------------------------- phase 1: fill, close, align
+      if (pop && qt_h[13:11] == K_A) begin
+        if (a32) RAW[fp_par][cabi] <= qd_h;
+        else begin
+          RAW[fp_par][{cabi[3:0], 1'b0}] <= {qd_h[63:48], 16'b0, qd_h[47:32], 16'b0,
+                                             qd_h[31:16], 16'b0, qd_h[15:0], 16'b0};
+          RAW[fp_par][{cabi[3:0], 1'b1}] <= {qd_h[127:112], 16'b0, qd_h[111:96], 16'b0,
+                                             qd_h[95:80], 16'b0, qd_h[79:64], 16'b0};
+        end
+        remax <= mx8(remax, mx); renan <= renan || nn; reninf <= reninf || ni;
+        if (qt_h[14]) begin                      // the group's last beat: close it
+          // The align engine may finish its group on this same cycle; chain the new group onto
+          // it unless a pending group is already waiting (that one is consumed first).
+          if ((!al_busy || aw == 6'd31) && !pend_v) begin
+            al_busy <= 1'b1; al_e <= ee; al_nan <= renan || nn; al_inf <= inf_eff;
+            al_par <= fp_par; al_m <= f1_m; al_g <= f1_g; aw <= 6'd0;
+          end else begin
+            pend_v <= 1'b1; pd_e <= ee; pd_nan <= renan || nn; pd_inf <= inf_eff;
+            pd_par <= fp_par; pd_m <= f1_m; pd_g <= f1_g;
+          end
+          fp_par <= !fp_par;
+          remax <= 8'd0; renan <= 1'b0; reninf <= 1'b0;
+          if (32'(f1_g) + 32'd1 >= gn) begin f1_g <= LGS'(0); f1_m <= f1_m + 2'd1; end
+          else f1_g <= LGS'(32'(f1_g) + 32'd1);
+          cabi <= 5'd0;
+        end else cabi <= cabi + 5'd1;
+      end
+
+      // the align engine: one group at a time (its X beat written at every odd word)
+      if (al_busy) begin
+        ahold <= pk;
+        if (aw == 6'd31) begin
+          al_cnt <= al_cnt + 32'd1;
+          if (pend_v) begin
+            al_e <= pd_e; al_nan <= pd_nan; al_inf <= pd_inf; al_par <= pd_par;
+            al_m <= pd_m; al_g <= pd_g; pend_v <= 1'b0;
+          end else if (!al_new) al_busy <= 1'b0;
+        end
+        aw <= (aw == 6'd31) ? 6'd0 : aw + 6'd1;
+      end
+
+      // -------------------------------------------------------- the phases
+      if (start) begin
+        ph <= 2'd0; a_run <= 1'b1; w_run <= 1'b0;
+        p1_m <= 2'd0; p1_g <= LGS'(0); p1_b <= 16'd0; p1_row <= a_base;
+        al_busy <= 1'b0; pend_v <= 1'b0; al_cnt <= 32'd0; aw <= 6'd0;
+        fp_par <= 1'b0; remax <= 8'd0; renan <= 1'b0; reninf <= 1'b0; cabi <= 5'd0;
+        f1_m <= 2'd0; f1_g <= LGS'(0);
+        drn <= 1'b0; dw <= 8'd0; rr <= '0; lp <= '0; lq_r <= 1'b0; sec <= 7'd0;
+        cn <= 16'd0;
+        c_sabs <= s_base; c_soff <= -32'(s_base[3:0]); c_ych <= y_base;
+        rsub <= 2'd0; rsec <= 32'd0; rwb <= 16'd0; rn <= 16'd0;
+        r_sabs <= s_base; r_sbeat <= {s_base[63:4], 4'b0}; r_wrow <= w_base; r_wbeat <= w_base;
+      end else if (ph2_go) begin
+        ph <= 2'd1; w_run <= 1'b1;
+        rsub <= 2'd0; rsec <= 32'd0; rwb <= 16'd0; rn <= 16'd0;
+        r_sabs <= s_base; r_sbeat <= {s_base[63:4], 4'b0}; r_wrow <= w_base; r_wbeat <= w_base;
+        cn <= 16'd0;
+        c_sabs <= s_base; c_soff <= -32'(s_base[3:0]); c_ych <= y_base;
+        rr <= '0; drn <= 1'b0; dw <= 8'd0; lp <= '0; lq_r <= 1'b0; sec <= 7'd0;
+      end else if (wadv) begin
+        if (ph == 2'd0) begin
+          if (32'(p1_b) + 32'd1 >= ab) begin
+            p1_b <= 16'd0;
+            if (32'(p1_m) + 32'd1 >= 32'(m_n)) a_run <= 1'b0;
+            else begin p1_m <= p1_m + 2'd1; p1_row <= p1_row + 64'(lda); end
+          end else p1_b <= p1_b + 16'd1;
+        end else if (rsub == 2'd0) begin
+          if (rsec + 32'd1 >= nbs) begin rsub <= bias ? 2'd1 : 2'd2; rsec <= 32'd0; end
+          else begin rsec <= rsec + 32'd1; r_sbeat <= r_sbeat + 64'd16; end
+        end else if (rsub == 2'd1) begin
+          rsub <= 2'd2;
+        end else if (32'(rwb) + 32'd1 < (32'(k_n) >> LW)) begin
+          rwb <= rwb + 16'd1; r_wbeat <= r_wbeat + 64'(16 * RW);
+        end else begin
+          // the channel's beats are issued: the next channel's bases (the last one ends the phase)
+          rwb <= 16'd0; rsub <= 2'd0;
+          if (32'(rn) + 32'd1 < 32'(n_n)) begin
+            rn <= rn + 16'd1;
+            r_sabs <= nx_rs; r_sbeat <= {nx_rs[63:4], 4'b0};
+            r_wrow <= r_wrow + 64'(32'(k_n) >> 1); r_wbeat <= r_wrow + 64'(32'(k_n) >> 1);
+          end else w_run <= 1'b0;
+        end
+      end
+
+      // -------------------------------------------------------- phase 2: the consumer
+      if (pop && qt_h[13:11] == K_S) begin
+        c_soff <= c_soff + 32'sd16;
+        wsb[sec] <= qd_h; sec <= sec + 7'd1;
+      end
+      if (pop && qt_h[13:11] == K_B) breg <= qd_h[32 * 32'(cn[1:0]) +: 32];
+      fire_d <= fire_w; fw1 <= fire_d;
+      if (fire_w) wreg <= {qh_h, qd_h};
+      if (fire_w) pend_cg <= 9'(qt_h[10:2]);
+      else if (prod && GPB != 1) pend_cg <= pend_cg + 9'd1;
+      if (fire_w && cw_last) begin drn <= 1'b1; dw <= 8'd24; end
+      else if (drn && dw != 8'd0) dw <= dw - 8'd1;
+      // the launches: one a cycle, M per channel; then the next channel (or the unit is done)
+      if (can_l && oq_free) begin lq_r <= 1'b1; lp <= LMB'(rr); rr <= rr + 1'b1; end
+      else lq_r <= 1'b0;
+      if (drn && dw == 8'd0 && !(32'(rr) < 32'(m_n)) && !lq_r) begin
+        drn <= 1'b0; dw <= 8'd0; rr <= '0; lp <= '0;
+        if (32'(cn) + 32'd1 < 32'(n_n)) begin
+          cn <= nx_c;
+          c_sabs <= nx_cabs; c_soff <= -32'(nx_cabs[3:0]); c_ych <= c_ych + 64'(es);
+          sec <= 7'd0;
+        end
+      end
+    end
+  end
+endmodule

@@ -202,7 +202,8 @@ def main():
     manifest = json.loads((data / "manifest.json").read_text())
     if args.mode != "prefill" and (min(positions) < 0 or max(positions) >= manifest["max_tokens"]):
         ap.error("positions outside the exported context")
-    dev = B.Fpga(profile=True)
+    mb = B.manifest_mem(data)
+    dev = B.Fpga(profile=True) if mb == B.MEM else B.Fpga(profile=True, mem_bytes=mb)
     if args.require_operators and dev.profile_cap != CAP:
         raise RuntimeError("operator counters missing: rebuild/load profiling RTL first")
     if dev.params["version"] < 0x30300:

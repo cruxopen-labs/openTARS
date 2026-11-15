@@ -1,7 +1,9 @@
-# TARS-mini on KV260 — Qwen3.5-0.8B 上板指南
+# TARS-mini on KV260 — 模型上板指南
 
 本目录是完整的上板包：比特流 + 驱动 + 模型数据 + 自检。核心配置为 R=8, C=2, VG=1，100 MHz，
-通过 S_AXI_HP0_FPD 访问 PS 侧 DDR。Qwen3.5-0.8B（真实权重，W8A8）全部 24 层、final norm 和
+通过 S_AXI_HP0_FPD 访问 PS 侧 DDR。支持的模型：Qwen3.5-0.8B、Qwen3-0.6B、Gemma 3 1B（W8A8），
+以及 Gemma 4 E2B（W8A8；W4A16 的软件栈已就绪，但 W4 比特流受 KV260 面积限制尚未发布，
+见 `docs/gemma4_w4/README.md`）。Qwen3.5-0.8B（真实权重，W8A8）全部 24 层、final norm 和
 248320 词表的 head 都在 TARS-mini 上执行；A53 只做分词、embedding 查表和 argmax。
 
 ## 验证状态（PC 上完成）
@@ -45,6 +47,7 @@
 | `sw/selftest.py` | 上板自检（硬件通路 + 模型逐比特比对） |
 | `data/` | `image.bin`（887 MiB：权重+状态）、`embed_bf16.bin`、`queues.bin`、`manifest.json`、`tokenizer.json`、`expected.json`、`selftest/` |
 | `data_mtp/`、`data_qwen3/`、`data_gemma3/` | 其他模型的导出，结构同 `data/`（用 `run.sh <模型>` 选择） |
+| `data_gemma4/`、`data_gemma4_w4/` | Gemma 4 E2B 的 W8A8 / W4A16 导出（T=512，约 1.9 / 1.21 GiB；`ple_bf16.bin`、`embed_bf16.bin` 可在板上硬链接共享）。W4A16 目录的 `min_firmware=0x00040001`（VERSION bit 0 = 带 W4 单元），当前 0x00040000 的固件会拒绝加载——这正确表示了"W4 比特流尚未发布" |
 | `data_fp16/`、`data_fp32_v34/`、`firmware_v34/` | FP16 状态实验（需要 v3.4 固件，`run.sh` 不加载，仅存档） |
 | `firmware_v33_profile/` | 带分算子计数器的 v3.3 实验比特流（仅存档） |
 | `results/` | 板上测量记录：`gemma3/`、`fp16_v34/`、`profile_v33/` |
@@ -78,9 +81,13 @@ sudo ./run.sh             # 串口对话
 | `qwen3.5-mtp` | `data_mtp/` | Qwen3.5-0.8B + MTP 头（`chat --spec`、`bench`） |
 | `qwen3` | `data_qwen3/` | Qwen3-0.6B |
 | `gemma3` | `data_gemma3/` | Gemma 3 1B（gemma-3-1b-it） |
+| `gemma4` | `data_gemma4/` | Gemma 4 E2B（W8A8，T=512） |
+| `gemma4-w4` | `data_gemma4_w4/` | Gemma 4 E2B（W4A16，T=512；需要带 W4 单元的固件，尚未发布） |
 
 例如 `sudo ./run.sh gemma3`（Gemma 对话）、`sudo ./run.sh qwen3 selftest`、`sudo ./run.sh gemma3 profile --out p.json`。
-四个模型共用同一个固件（`firmware/`，v3.3）。`sudo ./run.sh --help` 列出全部参数。
+固件随包发布 v4.0（4 GB 地址空间，VERSION 0x00040000），对旧模型向后兼容；
+`gemma4-w4` 的 manifest 写 `min_firmware=0x00040001`，加载时校验，未带 W4 单元的固件会明确报错。
+`sudo ./run.sh --help` 列出全部参数。
 
 `run.sh` 每次都会 `xmutil unloadapp && xmutil loadapp tars_kv260` 重新加载比特流（失败时退回
 `fpgautil`）。**不要在没加载比特流时访问 0xA0000000**，否则总线会挂死。
@@ -169,9 +176,9 @@ GEMV、ELT、FDOT NT/NN、RoPE、QUANT、Norm、Softmax、ACT 及取指/校验�
 
 ## 原理（板上软件做什么）
 
-- 核心的地址空间是 1 GB 的平坦空间，被切成 512 个 2 MB 页；软件申请 512 个 Linux hugepage，
-  从 `/proc/self/pagemap` 取得各自的物理地址写入核心里的页表（寄存器 0x2000+4i），所以不需要
-  物理连续内存，也不需要内核模块。
+- 核心的地址空间被切成 2 MB 页（页表 2048 项 = 4 GB），软件按 manifest 的 `mem_bytes` 申请足够
+  的 Linux hugepage（≥1 GB，向上取整到 2 MB），从 `/proc/self/pagemap` 取得各自的物理地址写入
+  核心里的页表（寄存器 0x2000+4i），所以不需要物理连续内存，也不需要内核模块。
 - HP0 端口不与 CPU cache 一致：写给核心的数据（权重、输入、描述符队列）先 `DC CVAC` 写回，
   读核心结果（logits）前 `DC CIVAC` 失效。
 - 每个 token：写入该 token 的 embedding（bf16→fp32，精确）和该位置的描述符队列（离线生成，
@@ -189,7 +196,7 @@ GEMV、ELT、FDOT NT/NN、RoPE、QUANT、Norm、Softmax、ACT 及取指/校验�
 | 0x020/024 | CYCLES | 核心运行周期（先读 LO） |
 | 0x028/02C | RD/WR_BEATS | AXI 读写拍数 |
 | 0x034 | PARAMS | R, C, VG, 页大小 |
-| 0x2000+4i | 页表 | 第 i 页（2 MB）的物理页号 = 物理地址 >> 21 |
+| 0x2000+4i | 页表 | 第 i 页（2 MB）的物理页号 = 物理地址 >> 21（共 2048 项） |
 
 ## 排错
 

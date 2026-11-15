@@ -52,6 +52,52 @@ def i2f(i) -> np.ndarray:
     return np.asarray(i, dtype=np.int64).astype(F32)
 
 
+def align_w4_groups(x) -> tuple[np.ndarray, np.ndarray]:
+    """FP32/BF16-expanded [M, K] activations -> signed INT16 mantissas and FP32 group scales.
+
+    K is a multiple of 128. Each row/group is aligned independently to its largest exponent:
+    emax_eff = max(emax, 14), x_scale = 2 ** (emax_eff - 140), and every significand is shifted
+    right by 10 + emax_eff - exponent with round-to-nearest-even before applying its sign. Thus a
+    mantissa is at most 16384 and a 128-element INT4 dot fits exactly in an INT32/FP32 conversion.
+
+    Special values are deterministic and propagate through the epilogue: a group containing NaN
+    has zero mantissas and canonical-NaN scale; without NaN, a group containing infinity has zero
+    finite mantissas, +/-16384 for its infinities, and +infinity scale. Subnormals flush to zero.
+    """
+    b = ftz(x).view(np.uint32).astype(np.int64)
+    shape = b.shape
+    if len(shape) != 2 or shape[1] == 0 or shape[1] % 128:
+        raise ValueError("W4A16 activations need [M, K], K a nonzero multiple of 128")
+    b = b.reshape(shape[0], shape[1] // 128, 128)
+    sign = (b & 0x80000000).astype(np.uint32)
+    exp = (b >> 23) & 0xFF
+    frac = b & 0x7FFFFF
+    nan = (exp == 255) & (frac != 0)
+    inf = (exp == 255) & (frac == 0)
+    has_nan = nan.any(axis=2)
+    has_inf = inf.any(axis=2) & ~has_nan
+    emax = np.where(exp == 0, 0, exp).max(axis=2)
+    emax_eff = np.maximum(emax, 14)
+    sh = 10 + emax_eff[:, :, None] - exp
+    u24 = (1 << 23) | frac
+    # Shift with RNE. sh >= 25 is exactly zero; the only retained values have sh in [0, 24].
+    safe = np.clip(sh, 0, 31)
+    shifted = u24 >> safe
+    rem = u24 & ((np.int64(1) << safe) - 1)
+    half = np.int64(1) << np.clip(safe - 1, 0, 30)
+    rounded = shifted + ((safe > 0) & ((rem > half) | ((rem == half) & ((shifted & 1) != 0))))
+    mag = np.where((exp == 0) | (sh >= 25) | (exp == 255), 0, rounded)
+    mag = np.where(inf & ~has_nan[:, :, None], 16384, mag)
+    mag = np.where(has_nan[:, :, None], 0, mag)
+    signed = np.where(sign != 0, -mag, mag).astype(np.int16)
+    scale_exp = np.clip(emax_eff - 13, 0, 255).astype(np.int64)
+    scale_bits = (scale_exp << 23).astype(np.uint32)
+    scale_bits = np.where(emax == 0, 0, scale_bits)
+    scale_bits = np.where(has_inf, 0x7F800000, scale_bits)
+    scale_bits = np.where(has_nan, 0x7FC00000, scale_bits)
+    return signed.reshape(shape), scale_bits.astype(np.uint32).view(F32)
+
+
 # ---------------------------------------------------------------------- v0.3 math primitives
 # Each is a fixed sequence of the contract's fmul / fadd (each rounded once, RNE, FTZ, no FMA)
 # plus exact integer operations on the bits; constants are given as fp32 bit patterns.

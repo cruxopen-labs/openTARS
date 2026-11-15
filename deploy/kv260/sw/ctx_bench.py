@@ -7,7 +7,7 @@ import tars_board as B
 import numpy as np
 from pathlib import Path
 d = Path(sys.argv[1])
-m = B.Qwen(B.Fpga(), d, log=lambda *a, **k: None)
+m = B.Qwen(B.Fpga(mem_bytes=B.manifest_mem(d)), d, log=lambda *a, **k: None)
 m.new_conversation()
 lg = m.prefill([9707, 11, 1879, 0])
 res = {}

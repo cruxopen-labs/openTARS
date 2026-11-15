@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from . import contract as C
-from .compiler import Program, quantize_weight
+from .compiler import Program, quantize_weight, quantize_weight4
 
 F32 = np.float32
 
@@ -112,6 +112,28 @@ class Dev(Program):
                    SCALE_OFF=w.s_off, BIAS_OFF=w.b_off or 0, Y_OFF=y.off, M=xq.rows, N=w.n, K=w.k,
                    HDR_RSV=srow // 16, LDA16=_ld16(xq.ld, xq.cols), LDY16=_ld16(y.ld, y.cols * C.ESIZE[y.fmt]))
 
+    def gemm_w4(self, x: V, w: "QLin", y: V, act: int = C.ACT_NONE) -> None:
+        """W4A16: FP32/BF16 activations stay unquantized; the GEMV aligns each 128-wide group."""
+        assert x.fmt in (C.OUT_FP32, C.OUT_BF16) and x.cols == w.k and y.cols == w.n
+        assert w.wbits == 4 and w.k >= 2 * C.W4_GROUP and w.k % (2 * C.W4_GROUP) == 0
+        assert w.w_off % 128 == 0
+        assert y.fmt != C.OUT_FP16
+        adt = C.DT_FP32 if x.fmt == C.OUT_FP32 else C.DT_BF16
+        self._emit(OPCODE=C.OP_GEMM,
+                   CTRL=C.ctrl(C.QM_GROUP, a_dtype=adt, w_dtype=C.DT_INT4, fusion=int(act != C.ACT_NONE)),
+                   EPI=C.epi(act, y.fmt, int(w.b_off is not None)), A_OFF=x.off, W_OFF=w.w_off,
+                   SCALE_OFF=w.s_off, BIAS_OFF=w.b_off or 0, Y_OFF=y.off, M=x.rows, N=w.n, K=w.k,
+                   GROUP_SIZE=C.W4_GROUP, LDA16=_ld16(x.ld, C.ESIZE[x.fmt] * x.cols),
+                   LDY16=_ld16(y.ld, y.cols * C.ESIZE[y.fmt]))
+
+    def gemm(self, x: V, w: "QLin", y: V, act: int = C.ACT_NONE, srow: int | None = None) -> None:
+        if w.wbits == 4:
+            assert srow is None
+            self.gemm_w4(x, w, y, act)
+        else:
+            assert srow is not None
+            self.gemm_rc(x, srow, w, y, act)
+
     def fdot(self, a: V, b: V, y: V, nn: bool) -> None:
         """NT: y = a @ b.T (b [N][K]); NN: y = a @ b (b [K][N])."""
         K = a.cols
@@ -158,6 +180,7 @@ class QLin:
     b_off: int | None
     n: int
     k: int
+    wbits: int = 8
 
 
 def pad16(n: int) -> int:
@@ -168,32 +191,44 @@ GEMV_K = 4096                                 # the KV260 GEMV unit's longest x 
 
 
 def input_embedding(cfg, rows: np.ndarray) -> np.ndarray:
-    """Embedding rows as the model consumes them (fp32). Gemma 3 scales them by sqrt(hidden), as
+    """Embedding rows as the model consumes them (fp32). Gemma 3 / 4 scale them by sqrt(hidden), as
     transformers does with fp32 weights: row * fp32(sqrt(H)), one fp32 rounding."""
     rows = np.asarray(rows, F32)
-    if getattr(cfg, "model_type", "") != "gemma3_text":
+    if getattr(cfg, "model_type", "") not in ("gemma3_text", "gemma4_text"):
         return rows
     return (rows * F32(cfg.hidden_size ** 0.5)).astype(F32)
+
+
+def ple_embedding(cfg, rows: np.ndarray) -> np.ndarray:
+    """Gemma 4 per-layer token embedding rows [n, L * ple_dim], scaled by fp32(sqrt(ple_dim))."""
+    rows = np.asarray(rows, F32)
+    return (rows * F32(cfg.hidden_size_per_layer_input ** 0.5)).astype(F32)
 
 
 class QwenLowering:
     def __init__(self, cfg, weights: dict[str, np.ndarray], max_tokens: int, ddr_bytes: int = 1 << 27,
                  head: bool = False, queue_cap: int = 0, scratch_bytes: int = 1 << 22, verify_rows: int = 1,
-                 mtp: bool = False, state_dtype: str = "fp32"):
+                 mtp: bool = False, state_dtype: str = "fp32", keep_layers: bool = True, wbits: int = 8):
         if state_dtype not in ("fp32", "fp16"):
             raise ValueError("state_dtype must be fp32 or fp16")
+        if wbits not in (4, 8):
+            raise ValueError("wbits must be 4 (W4A16) or 8 (W8A8)")
+        self.wbits = wbits
         self.state_dtype = state_dtype
         self.state_fmt = C.OUT_FP16 if state_dtype == "fp16" else C.OUT_FP32
+        self.keep_layers = keep_layers
         self.cfg, self.w, self.T = cfg, weights, max_tokens
         self.mtp = mtp                           # Qwen3.5's MTP head (weights["mtp.*"]): mtp_chunk drafts a token
         self.verify_rows = verify_rows           # logits rows a chunk can return (speculative decoding)
         self.p = self.prog = Dev(ddr_bytes=ddr_bytes)
         c = cfg
         self.H, self.eps = c.hidden_size, c.rms_norm_eps
-        self.q3 = getattr(c, "model_type", "") == "qwen3"
+        mt = getattr(c, "model_type", "")
+        self.q3 = mt == "qwen3"
         # Gemma 3: every layer full attention without the output gate (a sliding window no shorter
         # than the context changes nothing), four norms per layer, GeGLU, a RoPE base per layer type
-        self.gemma = getattr(c, "model_type", "") == "gemma3_text"
+        self.gemma = mt == "gemma3_text"
+        self.gemma4 = mt == "gemma4_text"
         self.types = list(c.layer_types)
         assert not self.q3 or set(self.types) == {"full_attention"}
         if self.gemma:
@@ -202,15 +237,36 @@ class QwenLowering:
             assert c.hidden_activation == "gelu_pytorch_tanh"
             assert max_tokens <= c.sliding_window, "the context must fit the sliding window"
             assert all(r.get("rope_type", "default") == "default" for r in c.rope_parameters.values())
+        if self.gemma4:
+            assert set(self.types) <= {"sliding_attention", "full_attention"}
+            assert getattr(c, "attn_logit_softcapping", None) is None
+            assert c.hidden_activation == "gelu_pytorch_tanh"
+            assert not getattr(c, "enable_moe_block", False) and not getattr(c, "attention_k_eq_v", False)
+            assert getattr(c, "num_global_key_value_heads", None) in (None, c.num_key_value_heads)
+            assert max_tokens <= c.sliding_window, "the context must fit the sliding window"
         # LA dims
         self.nk, self.nv = getattr(c, "linear_num_key_heads", 0), getattr(c, "linear_num_value_heads", 0)
         self.dk, self.dv = getattr(c, "linear_key_head_dim", 0), getattr(c, "linear_value_head_dim", 0)
         assert self.nk == self.nv, "the GQA repeat of linear attention is not lowered"
         # FA dims
-        self.nh, self.nkv, self.hd = c.num_attention_heads, c.num_key_value_heads, c.head_dim
-        self.rot = self.hd if self.gemma else int(self.hd * c.rope_parameters.get("partial_rotary_factor", 1.0))
-        # the attention scaling, folded into q_norm's gamma (1/16 for both models: exact)
-        self.qmul = c.query_pre_attn_scalar ** -0.5 if self.gemma else self.hd ** -0.5
+        self.nh, self.nkv = c.num_attention_heads, c.num_key_value_heads
+        if self.gemma4:
+            plc = getattr(c, "per_layer_config", None)
+            by_type = {t: (plc[i].head_dim if plc else c.head_dim) for i, t in enumerate(self.types)}
+            assert all((plc[i].head_dim if plc else c.head_dim) == by_type[t] for i, t in enumerate(self.types))
+            assert all((plc[i].num_key_value_heads if plc else c.num_key_value_heads) == self.nkv
+                       for i in range(len(self.types)))
+            self.hd = by_type.get("sliding_attention", by_type["full_attention"])
+            self.ghd = by_type.get("full_attention", self.hd)
+        else:
+            self.hd = self.ghd = c.head_dim
+        self.ple_dim = getattr(c, "hidden_size_per_layer_input", 0) or 0 if self.gemma4 else 0
+        self.first_kv_shared = len(self.types) - (getattr(c, "num_kv_shared_layers", 0) if self.gemma4 else 0)
+        self.softcap = getattr(c, "final_logit_softcapping", None)
+        self.rot = self.hd if (self.gemma or self.gemma4) \
+            else int(self.hd * c.rope_parameters.get("partial_rotary_factor", 1.0))
+        # the attention scaling, folded into q_norm's gamma (Gemma 4 uses scaling = 1.0)
+        self.qmul = 1.0 if self.gemma4 else (c.query_pre_attn_scalar ** -0.5 if self.gemma else self.hd ** -0.5)
         self.Tp = pad16(max_tokens)
         self.head = head
         self.taps = getattr(c, "linear_conv_kernel_dim", 4)
@@ -225,17 +281,32 @@ class QwenLowering:
         self._weights()
         self.end = self.p.top
 
+    def _layer_hd(self, t: str) -> int:
+        return self.ghd if (self.gemma4 and t == "full_attention") else self.hd
+
     # ------------------------------------------------------------------ weights (host side)
     def lin(self, w: np.ndarray, bias: np.ndarray | None = None) -> QLin:
+        b = self.p.put(np.asarray(bias, F32)) if bias is not None else None
+        if self.wbits == 4:
+            qw = quantize_weight4(w)
+            assert qw.n % 16 == 0
+            return QLin(self.p.put(qw.q, "u1"), self.p.put(qw.scale, "<u2"), b, qw.n, qw.k, 4)
         qw = quantize_weight(np.asarray(w, np.float64), per_channel=True)
         assert qw.n % 16 == 0 and qw.k % 16 == 0
-        b = self.p.put(np.asarray(bias, F32)) if bias is not None else None
         return QLin(self.p.put(qw.q, "i1"), self.p.put(qw.scale), b, qw.n, qw.k)
 
     def lin_k(self, w: np.ndarray, parts: int = 0) -> list[QLin]:
-        """A linear layer whose K may exceed the GEMV unit's: quantized as one (per-channel scales
-        over the whole row), stored as `parts` (default: the fewest) equal K blocks sharing the
-        scales; the partial products add in fp32."""
+        """Split K into equal GEMV-sized blocks. W8 shares one per-channel scale; W4 gives each
+        block its own contiguous group scales. Partial sums add in FP32 in the existing order."""
+        if self.wbits == 4:
+            qw = quantize_weight4(w)
+            parts = parts or -(-qw.k // GEMV_K)
+            kb = qw.k // parts
+            assert kb * parts == qw.k and kb % C.W4_GROUP == 0 and qw.n % 16 == 0
+            return [QLin(self.p.put(np.ascontiguousarray(qw.q[:, c // 2:(c + kb) // 2]), "u1"),
+                         self.p.put(np.ascontiguousarray(qw.scale[:, c // C.W4_GROUP:(c + kb) // C.W4_GROUP]), "<u2"),
+                         None, qw.n, kb, 4)
+                    for c in range(0, qw.k, kb)]
         qw = quantize_weight(np.asarray(w, np.float64), per_channel=True)
         parts = parts or -(-qw.k // GEMV_K)
         kb = qw.k // parts
@@ -245,11 +316,21 @@ class QwenLowering:
                 for c in range(0, qw.k, kb)]
 
     def gamma1(self, w: np.ndarray, mul: float = 1.0) -> V:
-        """The RMSNorm weight as gamma: Qwen3.5's zero-centered one, fp32(1 + w) (as torch: 1.0 +
-        weight.float()); Qwen3's, w itself. Times `mul`: the attention scaling folded into q_norm
-        (exact for Qwen3.5's 1/16; Qwen3's 128^-0.5 rounds once, in fp32)."""
-        g = np.asarray(w, F32) if self.q3 else (F32(1.0) + np.asarray(w, F32)).astype(F32)
+        """The RMSNorm weight as gamma: Qwen3.5 / Gemma 3 zero-centered one, fp32(1 + w) (as torch:
+        1.0 + weight.float()); Qwen3 / Gemma 4, w itself. Times `mul`: the attention scaling folded
+        into q_norm."""
+        g = np.asarray(w, F32) if (self.q3 or self.gemma4) else (F32(1.0) + np.asarray(w, F32)).astype(F32)
         return self.p.const((g * F32(mul)).astype(F32))
+
+    def linear(self, x: V, w: QLin, y: V, act: int = C.ACT_NONE,
+               qs: tuple[V, int] | None = None) -> None:
+        """Emit one linear: W8A8 quantizes its rows first; W4A16 consumes x directly.
+        qs reuses one W8 row quantization across projections sharing the same input."""
+        if self.wbits == 4:
+            self.p.gemm_w4(x, w, y, act)
+        else:
+            xq, xs = self.p.quant(x) if qs is None else qs
+            self.p.gemm_rc(xq, xs, w, y, act)
 
     def _la_weights(self, L: str) -> dict:
         W, p = self.w, self.p
@@ -276,9 +357,35 @@ class QwenLowering:
                      for n, o, dd in (("q", 0, kd), ("k", kd, kd), ("v", 2 * kd, vd))}
         return d
 
-    def _fa_weights(self, A: str) -> dict:
+    def _fa_weights(self, A: str, li: int | None = None) -> dict:
         W = self.w
         sa = A + "self_attn."
+        if self.gemma4:
+            assert li is not None
+            t = self.types[li]
+            hd = self._layer_hd(t)
+            shared = li >= self.first_kv_shared
+            g1 = lambda n, mul=1.0: self.gamma1(W[A + n + ".weight"], mul)
+            d = dict(
+                hd=hd, rot=hd, rope=t, kv_shared=shared,
+                ln_in=g1("input_layernorm"), attn_norm=g1("post_attention_layernorm"),
+                ln_post=g1("pre_feedforward_layernorm"), mlp_norm=g1("post_feedforward_layernorm"),
+                q=self.lin(W[sa + "q_proj.weight"]), g=None,
+                k=None if shared else self.lin(W[sa + "k_proj.weight"]),
+                v=None if shared else self.lin(W[sa + "v_proj.weight"]),
+                qn=g1("self_attn.q_norm", self.qmul),
+                kn=None if shared else g1("self_attn.k_norm"),
+                vn=None if shared else self.p.const(np.ones(hd, F32)),
+                o=self.lin_k(W[sa + "o_proj.weight"]),
+                gate=self.lin(W[A + "mlp.gate_proj.weight"]), up=self.lin(W[A + "mlp.up_proj.weight"]),
+                down=self.lin_k(W[A + "mlp.down_proj.weight"]),
+                layer_scalar=self.p.const(W[A + "layer_scalar"]))
+            if self.ple_dim:
+                d.update(
+                    ple_gate=self.lin(W[A + "per_layer_input_gate.weight"]),
+                    ple_proj=self.lin(W[A + "per_layer_projection.weight"]),
+                    ple_norm=g1("post_per_layer_input_norm"))
+            return d
         if self.gemma:
             g1 = lambda n, mul=1.0: self.gamma1(W[A + n + ".weight"], mul)
             return dict(
@@ -308,11 +415,17 @@ class QwenLowering:
     def _weights(self) -> None:
         p = self.p
         self.taps = 4
-        self.lw = [self._la_weights(f"layers.{i}.") if t == "linear_attention" else self._fa_weights(f"layers.{i}.")
+        self.lw = [self._la_weights(f"layers.{i}.") if t == "linear_attention" else self._fa_weights(f"layers.{i}.", i)
                    for i, t in enumerate(self.types)]
         if self.gemma:
             for w, t in zip(self.lw, self.types):
                 w["rope"] = t
+        if self.ple_dim:
+            self.ple_w = dict(
+                model_proj=self.lin(self.w["per_layer_model_projection.weight"]),
+                proj_scale=p.const(np.array([F32(self.H ** -0.5)], F32)),
+                proj_norm=self.gamma1(self.w["per_layer_projection_norm.weight"]),
+                in_scale=p.const(np.array([F32(2.0 ** -0.5)], F32)))
         self.final_norm = self.gamma1(self.w["norm.weight"])
         if self.mtp:
             W = self.w
@@ -326,10 +439,29 @@ class QwenLowering:
             inv = (1.0 / (th ** (np.arange(0, self.rot, 2, dtype=F32) / F32(self.rot)))).astype(F32)
             fr = (np.arange(self.T, dtype=F32)[:, None] * inv[None, :]).astype(F32)
             return p.const(np.concatenate([np.cos(fr), np.sin(fr)], axis=1).astype(F32))
-        if self.gemma:
+        if self.gemma4:
+            self.rope_tabs = {}
+            for t in sorted(set(self.types)):
+                hd = self._layer_hd(t)
+                rp = self.cfg.rope_parameters[t]
+                th = F32(rp["rope_theta"])
+                rt = rp.get("rope_type", "default")
+                assert rt in ("default", "proportional")
+                prop = rp.get("partial_rotary_factor", 1.0) if rt == "proportional" else 1.0
+                ang = int(prop * hd // 2)
+                inv = np.zeros(hd // 2, F32)
+                inv[:ang] = (1.0 / (th ** (np.arange(0, 2 * ang, 2, dtype=F32) / F32(hd)))).astype(F32)
+                fr = (np.arange(self.T, dtype=F32)[:, None] * inv[None, :]).astype(F32)
+                self.rope_tabs[t] = p.const(np.concatenate([np.cos(fr), np.sin(fr)], axis=1).astype(F32))
+        elif self.gemma:
             self.rope_tabs = {t: table(self.cfg.rope_parameters[t]["rope_theta"]) for t in sorted(set(self.types))}
         else:
             self.rope_tab = table(self.cfg.rope_parameters["rope_theta"])
+        if self.softcap is not None:
+            sc = float(self.softcap)
+            self.sc_inv2 = p.const(np.array([F32(2.0 / sc)], F32))
+            self.sc_two = p.const(np.array([F32(2.0 * sc)], F32))
+            self.sc_val = p.const(np.array([F32(sc)], F32))
         # the head: the tied embedding table as INT8 per-channel row blocks
         self.head_lins = []
         if self.head:
@@ -342,33 +474,72 @@ class QwenLowering:
         """The host's lookup: input embeddings [len(ids), H] fp32."""
         return input_embedding(self.cfg, self.w["embed_tokens.weight"][np.asarray(ids)])
 
+    def embed_ple(self, ids) -> np.ndarray:
+        """The host's Gemma 4 per-layer token lookup [len(ids), L * ple_dim] fp32."""
+        return ple_embedding(self.cfg, self.w["embed_tokens_per_layer.weight"][np.asarray(ids)])
+
     # ------------------------------------------------------------------ state in DDR
     def _state(self) -> None:
         p, T, H = self.p, self.T, self.H
         kd, vd = self.nk * self.dk, self.nv * self.dv
         hist = self.taps - 1
-        self.xs = [p.mat(T, H) for _ in range(len(self.types) + 1)]   # the residual stream: input, each layer's output
-        self.x0 = self.xs[0]
+        if getattr(self, "keep_layers", True):
+            self.xs = [p.mat(T, H) for _ in range(len(self.types) + 1)]   # the residual stream: input, each layer's output
+            self.x0 = self.xs[0]
+        else:
+            self.x0 = p.mat(T, H)
+            xb0, xb1 = p.mat(T, H), p.mat(T, H)
+            self.xs = [self.x0] + [xb0 if i % 2 == 0 else xb1 for i in range(len(self.types))]
+        ple_dim = getattr(self, "ple_dim", 0)
+        if ple_dim:
+            cols = len(self.types) * ple_dim
+            self.ple0 = p.mat(T, cols)             # host-loaded token PLE [T, L * ple_dim]
+            self.ple = p.mat(T, cols)              # projected PLE [T, L * ple_dim]
+        else:
+            self.ple0 = self.ple = None
         self.y = p.mat(T, H)                       # after the final norm
         self.st = []
-        for t in self.types:
+        last_kv: dict[str, dict] = {}
+        first_kv = getattr(self, "first_kv_shared", len(self.types))
+        for i, t in enumerate(self.types):
             if t == "linear_attention":
                 # conv inputs, rows t + hist (the first hist rows are the zero history); DeltaNet states
                 # with the MTP two copies: a verify's last token updates the other one (see _la)
                 self.st.append(dict(cin={n: p.mat(T + hist, d) for n, d in (("q", kd), ("k", kd), ("v", vd))},
                                     S=[[p.mat(self.dk, self.dv, self.state_fmt) for _ in range(self.nv)]
                                        for _ in range(2 if self.mtp else 1)]))
-            else:                                  # KV cache (zero padded)
-                self.st.append(dict(kc=p.mat(self.Tp, self.nkv * self.hd), vc=p.mat(self.Tp, self.nkv * self.hd)))
+            elif i < first_kv:                     # KV cache (zero padded)
+                hd = self._layer_hd(t) if hasattr(self, "ghd") else self.hd
+                kv = dict(kc=p.mat(self.Tp, self.nkv * hd), vc=p.mat(self.Tp, self.nkv * hd))
+                self.st.append(kv)
+                last_kv[t] = kv
+            else:                                  # KV-shared layer: reuses last non-shared layer of same type
+                self.st.append(last_kv[t])
         if self.mtp:                               # the MTP layer's KV cache (row r: token r + 1, hidden r)
             self.mst = dict(kc=p.mat(self.Tp, self.nkv * self.hd), vc=p.mat(self.Tp, self.nkv * self.hd))
         self.logits = p.mat(self.verify_rows, self.vocab) if self.head else None   # the chunk's last token (or tokens)
 
-    def input(self, x: np.ndarray, t0: int = 0) -> None:
+    def input(self, x: np.ndarray, t0: int = 0, ple: np.ndarray | None = None) -> None:
         a = self.p.base + self.x0.off + t0 * self.x0.ld
         self.p.ddr[a:a + x.size * 4] = np.asarray(x, F32).tobytes()
+        if ple is not None:
+            assert self.ple0 is not None
+            pa = self.p.base + self.ple0.off + t0 * self.ple0.ld
+            self.p.ddr[pa:pa + ple.size * 4] = np.asarray(ple, F32).tobytes()
 
     # ------------------------------------------------------------------ blocks
+    def _project_ple(self, t0: int, n: int) -> None:
+        p, P, L_n = self.p, self.ple_dim, len(self.types)
+        pw = self.ple_w
+        proj = p.mat(n, L_n * P)
+        self.linear(self.x0.rowv(t0, n), pw["model_proj"], proj)
+        p.elt(C.ELT_MUL, proj, pw["proj_scale"], proj, bmode=C.BM_SCALAR)
+        proj_n = p.mat(n, L_n * P)
+        p.norm(proj.heads(P), pw["proj_norm"], self.eps, proj_n.heads(P))
+        dst = self.ple.rowv(t0, n)
+        p.elt(C.ELT_ADD, proj_n, self.ple0.rowv(t0, n), dst)
+        p.elt(C.ELT_MUL, dst, pw["in_scale"], dst, bmode=C.BM_SCALAR)
+
     def chunk(self, t0: int, n: int, all_rows: bool = False, parity: int = 0, spec: bool = False) -> None:
         """Tokens t0 .. t0 + n - 1 through every layer, the final norm and (with the head) the last
         token's logits; all_rows: every token's, for a speculative verify (logits_rows reads them).
@@ -378,6 +549,10 @@ class QwenLowering:
         assert not all_rows or n <= self.verify_rows
         self.parity, self.spec = parity, spec
         p = self.p
+        if self.ple_dim:
+            p.top = self.scratch0
+            self._project_ple(t0, n)
+            assert p.top <= self.scratch_end, "scratch_bytes too small for PLE projection"
         for i, t in enumerate(self.types):
             p.top = self.scratch0                  # this layer's temporaries over the last layer's
             (self._la if t == "linear_attention" else self._fa)(i, t0, n)
@@ -401,9 +576,15 @@ class QwenLowering:
 
     def _head(self, y: V) -> None:
         p, r, c0 = self.p, y.rows, 0
-        yq, ys = p.quant(y)
+        qs = p.quant(y) if self.wbits == 8 else None
         for lin in self.head_lins:
-            p.gemm_rc(yq, ys, lin, V(self.logits.off + 4 * c0 * r, r, lin.n, 4 * lin.n))
+            out = V(self.logits.off + 4 * c0 * r, r, lin.n, 4 * lin.n)
+            self.linear(y, lin, out, qs=qs)
+            if self.softcap is not None:
+                # 30 * tanh(x / 30) == 60 * sigmoid(x / 15) - 30 on the NPU (bit-identical across hosts)
+                p.elt(C.ELT_MUL, out, self.sc_inv2, out, bmode=C.BM_SCALAR)
+                p.elt(C.ELT_MUL, out, self.sc_two, out, bmode=C.BM_SCALAR, act=C.ACT_SIGMOID)
+                p.elt(C.ELT_SUB, out, self.sc_val, out, bmode=C.BM_SCALAR)
             c0 += lin.n
 
     def mtp_chunk(self, r0: int, n: int, head: bool = True) -> None:
@@ -415,9 +596,8 @@ class QwenLowering:
         cat = p.mat(n, 2 * H)
         p.norm(self.x0.rowv(r0 + 1, n), w["ge"], self.eps, cat.colv(0, H))
         p.norm(self.y.rowv(r0, n), w["gh"], self.eps, cat.colv(H, H))
-        cq, cs = p.quant(cat)
         x, out = p.mat(n, H), p.mat(n, H)
-        p.gemm_rc(cq, cs, w["fc"], x)
+        self.linear(cat, w["fc"], x)
         self._fa_block(w, self.mst, x, out, r0, n)
         if head:
             y = p.mat(1, H)
@@ -427,23 +607,24 @@ class QwenLowering:
         p.top = self.end
 
     def _mlp(self, w: dict, x: V, out: V) -> None:
-        """out = x + down(silu(gate(h)) * up(h)), h = RMSNorm(x). Gemma 3: GELU (tanh) for SiLU,
+        """out = x + down(silu(gate(h)) * up(h)), h = RMSNorm(x). Gemma 3 / 4: GELU (tanh) for SiLU,
         the down projection in K blocks, its output normalized before the residual add."""
         p, n = self.p, x.rows
         h = p.mat(n, self.H)
         p.norm(x, w["ln_post"], self.eps, h)
-        hq, hs = p.quant(h)
+        qs = p.quant(h) if self.wbits == 8 else None
         g, u = p.mat(n, w["gate"].n), p.mat(n, w["up"].n)
-        p.gemm_rc(hq, hs, w["gate"], g, act=C.ACT_GELU if self.gemma else C.ACT_SILU)
-        p.gemm_rc(hq, hs, w["up"], u)
+        self.linear(h, w["gate"], g, act=C.ACT_GELU if (self.gemma or self.gemma4) else C.ACT_SILU, qs=qs)
+        self.linear(h, w["up"], u, qs=qs)
         p.elt(C.ELT_MUL, g, u, g)                                   # in place: act(gate) * up
-        gq, gs = p.quant(g)
+        gqs = p.quant(g) if self.wbits == 8 else None
         d = p.mat(n, self.H)
         downs = w["down"] if isinstance(w["down"], list) else [w["down"]]
         c0 = 0
         for i, lin in enumerate(downs):
             part = d if i == 0 else p.mat(n, self.H)
-            p.gemm_rc(gq.colv(c0, lin.k), gs, lin, part)
+            self.linear(g.colv(c0, lin.k), lin, part,
+                        qs=None if gqs is None else (gqs[0].colv(c0, lin.k), gqs[1]))
             if i:
                 p.elt(C.ELT_ADD, d, part, d)
             c0 += lin.k
@@ -459,15 +640,15 @@ class QwenLowering:
         x = self.xs[li].rowv(t0, n)
         h = p.mat(n, self.H)
         p.norm(x, w["ln_in"], self.eps, h)
-        hq, hs = p.quant(h)
+        qs = p.quant(h) if self.wbits == 8 else None
         # projections; q, k, v straight into the conv input rows
         for nm in ("q", "k", "v"):
-            p.gemm_rc(hq, hs, w[nm], st["cin"][nm].rowv(hist + t0, n))
+            self.linear(h, w[nm], st["cin"][nm].rowv(hist + t0, n), qs=qs)
         z = p.mat(n, vd)
-        p.gemm_rc(hq, hs, w["z"], z)
+        self.linear(h, w["z"], z, qs=qs)
         beta, sp = p.mat(n, self.nv), p.mat(n, self.nv)
-        p.gemm_rc(hq, hs, w["b"], beta, act=C.ACT_SIGMOID)
-        p.gemm_rc(hq, hs, w["a"], sp, act=C.ACT_SOFTPLUS)           # + dt_bias (the GEMM's bias)
+        self.linear(h, w["b"], beta, act=C.ACT_SIGMOID, qs=qs)
+        self.linear(h, w["a"], sp, act=C.ACT_SOFTPLUS, qs=qs)       # + dt_bias (the GEMM's bias)
         g = p.mat(n, self.nv)
         p.elt(C.ELT_MUL, sp, w["negA"], g, bmode=C.BM_ROW)          # g = -exp(A_log) * softplus
         decay = p.mat(n, self.nv)
@@ -507,39 +688,45 @@ class QwenLowering:
         on, og = p.mat(n, vd), p.mat(n, vd)
         p.norm(oh, w["gnorm"], self.eps, on.heads(self.dv))
         p.elt(C.ELT_MUL, z, on, og, act=C.ACT_SILU)
-        oq, os_ = p.quant(og)
         a = p.mat(n, self.H)
-        p.gemm_rc(oq, os_, w["out"], a)
+        self.linear(og, w["out"], a)
         x1 = p.mat(n, self.H)
         p.elt(C.ELT_ADD, x, a, x1)
         self._mlp(w, x1, self.xs[li + 1].rowv(t0, n))
 
     def _fa(self, li: int, t0: int, n: int) -> None:
-        self._fa_block(self.lw[li], self.st[li], self.xs[li].rowv(t0, n), self.xs[li + 1].rowv(t0, n), t0, n)
+        self._fa_block(self.lw[li], self.st[li], self.xs[li].rowv(t0, n), self.xs[li + 1].rowv(t0, n), t0, n, li)
 
-    def _fa_block(self, w: dict, st: dict, x: V, out: V, t0: int, n: int) -> None:
+    def _fa_block(self, w: dict, st: dict, x: V, out: V, t0: int, n: int, li: int | None = None) -> None:
         p = self.p
         kc, vc = st["kc"], st["vc"]
-        nh, nkv, hd = self.nh, self.nkv, self.hd
+        nh, nkv = self.nh, self.nkv
+        hd, rot = w.get("hd", self.hd), w.get("rot", self.rot)
         h = p.mat(n, self.H)
         p.norm(x, w["ln_in"], self.eps, h)
-        hq, hs = p.quant(h)
+        qs = p.quant(h) if self.wbits == 8 else None
         q = p.mat(n, nh * hd)
-        k, v = p.mat(n, nkv * hd), vc.rowv(t0, n)
-        p.gemm_rc(hq, hs, w["q"], q)
+        self.linear(h, w["q"], q, qs=qs)
         if w["g"] is not None:
             g = p.mat(n, nh * hd)
-            p.gemm_rc(hq, hs, w["g"], g)
-        p.gemm_rc(hq, hs, w["k"], k)
-        p.gemm_rc(hq, hs, w["v"], v)                                 # V straight into the cache
-        # q / k norm per head (q's gamma carries hd^-0.5), RoPE; K into the cache
-        qn, kn = p.mat(n, nh * hd), p.mat(n, nkv * hd)
+            self.linear(h, w["g"], g, qs=qs)
+        qn = p.mat(n, nh * hd)
         p.norm(q.heads(hd), w["qn"], self.eps, qn.heads(hd))
-        p.norm(k.heads(hd), w["kn"], self.eps, kn.heads(hd))
         qr = p.mat(n, nh * hd)
         tab = (self.rope_tabs[w["rope"]] if "rope" in w else self.rope_tab).rowv(t0, (n * nh - 1) // nh + 1)
-        p.rope(qn.heads(hd), tab, nh, self.rot, qr.heads(hd))
-        p.rope(kn.heads(hd), tab, nkv, self.rot, kc.rowv(t0, n).heads(hd))
+        p.rope(qn.heads(hd), tab, nh, rot, qr.heads(hd))
+        if not w.get("kv_shared", False):
+            k = p.mat(n, nkv * hd)
+            self.linear(h, w["k"], k, qs=qs)
+            if w.get("vn") is not None:
+                vr = p.mat(n, nkv * hd)
+                self.linear(h, w["v"], vr, qs=qs)
+                p.norm(vr.heads(hd), w["vn"], self.eps, vc.rowv(t0, n).heads(hd))
+            else:
+                self.linear(h, w["v"], vc.rowv(t0, n), qs=qs)         # V straight into the cache
+            kn = p.mat(n, nkv * hd)
+            p.norm(k.heads(hd), w["kn"], self.eps, kn.heads(hd))
+            p.rope(kn.heads(hd), tab, nkv, rot, kc.rowv(t0, n).heads(hd))
         # attention per query head over keys [0, t0 + n) (padded to 16, masked causally)
         nk = pad16(t0 + n)
         att = p.mat(n, nh * hd)
@@ -556,16 +743,38 @@ class QwenLowering:
             ga = p.mat(n, nh * hd)
             p.elt(C.ELT_MUL, g, att, ga, act=C.ACT_SIGMOID)          # attn * sigmoid(gate)
             att = ga
-        aq, as_ = p.quant(att)
+        aqs = p.quant(att) if self.wbits == 8 else None
         o = p.mat(n, self.H)
-        p.gemm_rc(aq, as_, w["o"], o)
+        os_list = w["o"] if isinstance(w["o"], list) else [w["o"]]
+        c0 = 0
+        for i, lin in enumerate(os_list):
+            part = o if i == 0 else p.mat(n, self.H)
+            self.linear(att.colv(c0, lin.k), lin, part,
+                        qs=None if aqs is None else (aqs[0].colv(c0, lin.k), aqs[1]))
+            if i:
+                p.elt(C.ELT_ADD, o, part, o)
+            c0 += lin.k
         if w.get("attn_norm") is not None:
             on = p.mat(n, self.H)
             p.norm(o, w["attn_norm"], self.eps, on)
             o = on
         x1 = p.mat(n, self.H)
         p.elt(C.ELT_ADD, x, o, x1)
-        self._mlp(w, x1, out)
+        x2 = p.mat(n, self.H) if "ple_gate" in w else out
+        self._mlp(w, x1, x2)
+        if "ple_gate" in w:
+            assert li is not None
+            P = self.ple_dim
+            pg = p.mat(n, P)
+            self.linear(x2, w["ple_gate"], pg, act=C.ACT_GELU)
+            p.elt(C.ELT_MUL, pg, self.ple.rowv(t0, n).colv(li * P, P), pg)
+            pp = p.mat(n, self.H)
+            self.linear(pg, w["ple_proj"], pp)
+            ppn = p.mat(n, self.H)
+            p.norm(pp, w["ple_norm"], self.eps, ppn)
+            p.elt(C.ELT_ADD, x2, ppn, out)
+        if w.get("layer_scalar") is not None:
+            p.elt(C.ELT_MUL, out, w["layer_scalar"], out, bmode=C.BM_SCALAR)
 
     # ------------------------------------------------------------------ running chunk by chunk
     def stage(self, ddr: bytearray, a: int, b: int) -> tuple[int, int]:
@@ -576,9 +785,13 @@ class QwenLowering:
             ddr[q + 64 * (i - a):q + 64 * (i - a + 1)] = self.p.descs[i]
         return q, b - a
 
-    def put_input(self, ddr: bytearray, t0: int, x: np.ndarray) -> None:
+    def put_input(self, ddr: bytearray, t0: int, x: np.ndarray, ple: np.ndarray | None = None) -> None:
         a = self.p.base + self.x0.off + t0 * self.x0.ld
         ddr[a:a + x.size * 4] = np.asarray(x, F32).tobytes()
+        if ple is not None:
+            assert self.ple0 is not None
+            pa = self.p.base + self.ple0.off + t0 * self.ple0.ld
+            ddr[pa:pa + ple.size * 4] = np.asarray(ple, F32).tobytes()
 
     def logits_of(self, ddr) -> np.ndarray:
         a = self.p.base + self.logits.off
@@ -603,7 +816,8 @@ class QwenLowering:
         ids, logits, counts = list(prompt), [], []
         t0, n = 0, len(prompt)
         for _ in range(n_new + 1):
-            self.put_input(ddr, t0, self.embed(ids[t0:t0 + n]))
+            toks = ids[t0:t0 + n]
+            self.put_input(ddr, t0, self.embed(toks), self.embed_ple(toks) if self.ple_dim else None)
             a = len(self.p.descs)
             self.chunk(t0, n)
             q, cnt = self.stage(ddr, a, len(self.p.descs))

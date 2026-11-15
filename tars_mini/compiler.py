@@ -57,6 +57,34 @@ def quantize_weight(w: np.ndarray, per_channel: bool = True) -> QWeight:
     return QWeight(q=q, scale=s.astype(np.float32), n=w.shape[0], k=w.shape[1])
 
 
+@dataclass
+class QWeight4:
+    """Group-128 symmetric INT4 weights, packed two per byte, with binary16 group scales."""
+    q: np.ndarray            # uint8 [N, K / 2], low nibble = even k, high nibble = odd k
+    scale: np.ndarray        # uint16 [N, K / 128], IEEE binary16 bits
+    n: int
+    k: int
+
+
+def quantize_weight4(w: np.ndarray) -> QWeight4:
+    """W4A16 host quantization: s = fp16(group_amax / 7), q = RNE(w / fp32(s)), clipped [-7, 7].
+
+    Quantization uses the actual rounded scale. An all-zero group uses scale 1.0, as INT8 does.
+    """
+    w = np.asarray(w, dtype=np.float64)
+    if w.ndim != 2 or w.shape[1] == 0 or w.shape[1] % C.W4_GROUP:
+        raise ValueError("W4A16 weights need [N, K], K a nonzero multiple of 128")
+    n, k = w.shape
+    groups = w.reshape(n, k // C.W4_GROUP, C.W4_GROUP)
+    amax = np.abs(groups).max(axis=2)
+    s0 = np.where(amax > 0, amax / 7.0, 1.0).astype(np.float32)
+    sb = s0.astype(np.float16)
+    s = sb.astype(np.float32).astype(np.float64)
+    q = np.clip(np.rint(groups / s[:, :, None]), -7, 7).astype(np.int16)
+    packed = ((q[:, :, 0::2] & 15) | ((q[:, :, 1::2] & 15) << 4)).astype(np.uint8)
+    return QWeight4(packed.reshape(n, k // 2), sb.view(np.uint16), n, k)
+
+
 def act_scale(x: np.ndarray, percentile: float = 100.0) -> float:
     """Per-tensor activation scale from calibration data: amax / 127."""
     amax = float(np.percentile(np.abs(x), percentile)) if percentile < 100 else float(np.abs(x).max())

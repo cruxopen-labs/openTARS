@@ -1,12 +1,12 @@
-"""TARS-mini on the KV260: the device and the model runtime (Qwen3.5-0.8B, Qwen3-0.6B or Gemma 3 1B:
-whatever the export in data/ holds).
+"""TARS-mini on the KV260: the device and the model runtime (Qwen3.5-0.8B, Qwen3-0.6B, Gemma 3 1B
+or Gemma 4 E2B: whatever the export in data/ holds).
 
 Device backends (same interface):
-  Fpga    the board: registers through libtmdrv (/dev/mem), a 1 GB hugepage buffer as the core's
-          memory (the core's page table maps it), cache maintenance around each run. Root only.
+  Fpga    the board: registers through libtmdrv (/dev/mem), a hugepage buffer sized to the model
+          (>= 1 GB, mapped through the core's 2 MB page table), cache maintenance around each run.
   Golden  the bit-exact golden model on a PC (tars_mini.golden), to check this runtime offline.
 
-    dev.mem            numpy uint8 view of the core's address space [0, MEM)
+    dev.mem            numpy uint8 view of the core's mapped address space [0, mem_bytes)
     dev.to_dev(a, n)   make CPU writes to [a, a + n) visible to the core
     dev.from_dev(a, n) make the core's writes to [a, a + n) visible to the CPU
     dev.run(q, n)      run n descriptors at core address q; returns (done, err, op_idx, cycles)
@@ -25,7 +25,7 @@ if (HERE.parent / "pylib").is_dir():                 # the bundled wheels (setup
     sys.path.insert(0, str(HERE.parent / "pylib"))
 
 import numpy as np  # noqa: E402
-MEM = 1 << 30                 # the core's address space (MEM_BYTES of the bitstream)
+MEM = 1 << 30                 # default mapped buffer size (legacy 1 GB exports)
 HPAGE = 2 << 20
 
 # registers (rtl/tm_kv260.sv)
@@ -36,8 +36,20 @@ ERRORS = {0: "OK", 1: "E_MAGIC", 2: "E_VERSION", 3: "E_CRC", 4: "E_VALID", 5: "E
           7: "E_ALIGN", 8: "E_RANGE"}                    # tars_mini/contract.py
 
 
+def manifest_mem(data: str | Path | None = None) -> int:
+    """Mapped buffer size (a multiple of 2 MB, at least 1 GB) requested by data/manifest.json."""
+    if data is None:
+        return MEM
+    mf = Path(data) / "manifest.json"
+    if not mf.exists():
+        return MEM
+    mb = int(json.loads(mf.read_text()).get("mem_bytes", MEM))
+    return max(MEM, ((mb + HPAGE - 1) // HPAGE) * HPAGE)
+
+
 class Fpga:
-    def __init__(self, lib: str | Path = HERE / "libtmdrv.so", hugepages: bool = True, profile: bool = False):
+    def __init__(self, lib: str | Path = HERE / "libtmdrv.so", hugepages: bool = True,
+                 profile: bool = False, mem_bytes: int | None = None):
         if os.geteuid() != 0:
             raise PermissionError("run as root (sudo): /dev/mem and the physical addresses of the buffer")
         if not pl_loaded():                           # a read of an unprogrammed PL hangs the bus
@@ -60,14 +72,17 @@ class Fpga:
         p = L.tm_rd(R_PARAMS)
         self.params = dict(R=p & 0xFF, C=(p >> 8) & 0xFF, VG=(p >> 16) & 0xF, page_bits=16 + ((p >> 24) & 0xF),
                            mem_mb=L.tm_rd(R_MEMMB), version=L.tm_rd(R_VER))
-        if self.params["mem_mb"] << 20 != MEM or self.params["page_bits"] != 21:
-            raise RuntimeError(f"unexpected bitstream parameters {self.params}")
-        npg = MEM // HPAGE
+        req = MEM if mem_bytes is None else ((int(mem_bytes) + HPAGE - 1) // HPAGE) * HPAGE
+        hw_bytes = int(self.params["mem_mb"]) << 20
+        if self.params["page_bits"] != 21 or req <= 0 or req > hw_bytes:
+            raise RuntimeError(f"need {req >> 20} MiB (2 MB pages), bitstream parameters are {self.params}")
+        npg = req // HPAGE
+        hw_npg = hw_bytes // HPAGE
         if hugepages:
             ensure_hugepages(npg + 16)
         ppn = (ctypes.c_uint64 * npg)()
         err = ctypes.c_int(0)
-        ptr = L.tm_alloc(MEM, ppn, ctypes.byref(err))
+        ptr = L.tm_alloc(req, ppn, ctypes.byref(err))
         if not ptr:
             raise MemoryError(f"hugepage buffer: error {err.value} (need {npg} free 2 MB hugepages: "
                               f"echo {npg + 16} > /proc/sys/vm/nr_hugepages)")
@@ -75,11 +90,13 @@ class Fpga:
         self.last_perf = None
         self.profile_enabled = profile
         self.profile_cap = L.tm_rd(0x05C) if profile else 0
-        self.mem = np.ctypeslib.as_array((ctypes.c_uint8 * MEM).from_address(ptr))
+        self.mem = np.ctypeslib.as_array((ctypes.c_uint8 * req).from_address(ptr))
         self.ppn = list(ppn)
         self.reset()
         for i, pn in enumerate(self.ppn):          # the core's page i -> this physical page
             L.tm_wr(R_PT + 4 * i, pn)
+        for i in range(npg, hw_npg):               # initialize unallocated hardware PTEs cleanly
+            L.tm_wr(R_PT + 4 * i, self.ppn[0])
         L.tm_wr(R_CLEAR, 1)
 
     def reset(self) -> None:
@@ -203,7 +220,7 @@ class Qwen:
         minimum = max(m.get("min_firmware", 0), 0x30400 if m.get("state_dtype") == "fp16" else 0)
         params = getattr(dev, "params", {})
         if params.get("backend") != "golden model" and params.get("version", 0) < minimum:
-            raise RuntimeError(f"export requires firmware >= 0x{minimum:08x}; rebuild/load FP16-state firmware")
+            raise RuntimeError(f"export requires firmware >= 0x{minimum:08x}; rebuild/load newer firmware")
         self.m = m
         self.T, self.H, self.vocab = m["max_tokens"], m["hidden"], m["vocab"]
         t = time.time()
@@ -211,6 +228,9 @@ class Qwen:
         size = img.stat().st_size
         if size != m["image_bytes"]:
             raise RuntimeError(f"{img}: {size} bytes, the manifest says {m['image_bytes']}")
+        req_mem = max(size, int(m.get("mem_bytes", size)))
+        if len(dev.mem) < req_mem:
+            raise RuntimeError(f"device buffer is {len(dev.mem) >> 20} MiB, export needs {req_mem >> 20} MiB")
         with open(img, "rb") as f:                    # straight into the device buffer
             mv = memoryview(dev.mem)
             pos = 0
@@ -223,8 +243,16 @@ class Qwen:
         log("")
         dev.mem[size:] = 0
         dev.to_dev(0, len(dev.mem))
-        self.state0 = dev.mem[:m["state_end"]].copy()       # a fresh conversation's states
+        self.state_end = int(m["state_end"])
+        self.state0 = dev.mem[:self.state_end].copy() if np.any(dev.mem[:self.state_end]) else None
         self.embed = np.memmap(self.d / "embed_bf16.bin", np.uint16, "r", shape=(self.vocab, self.H))
+        self.ple_cols = int(m.get("ple_cols", 0))
+        if self.ple_cols:
+            self.ple = np.memmap(self.d / "ple_bf16.bin", np.uint16, "r", shape=(self.vocab, self.ple_cols))
+            self.ple_scale = np.float32(m["ple_scale"])
+        else:
+            self.ple = None
+            self.ple_scale = None
         self.qidx = np.asarray(m["queue_index"], np.int64)  # [T, 2]: byte offset, descriptors
         self.queues = np.memmap(self.d / "queues.bin", np.uint8, "r")
         # prefill chunks: n tokens in one queue (the weights read once), at the t0 listed; only
@@ -250,8 +278,11 @@ class Qwen:
         self.pos = 0
 
     def new_conversation(self) -> None:
-        self.dev.mem[:len(self.state0)] = self.state0
-        self.dev.to_dev(0, len(self.state0))
+        if self.state0 is None:
+            self.dev.mem[:self.state_end] = 0
+        else:
+            self.dev.mem[:self.state_end] = self.state0
+        self.dev.to_dev(0, self.state_end)
         self.pos, self.par, self.mrow, self.draft = 0, 0, 0, None
 
     def encode(self, tk, text: str, chat: bool = True) -> list[int]:
@@ -271,11 +302,16 @@ class Qwen:
             raise OverflowError(f"context full ({self.T} tokens)")
         for i, token in enumerate(tokens):
             x = (self.embed[token].astype(np.uint32) << 16).view(np.float32)   # bf16 -> fp32, exact
-            if self.embed_scale is not None:                # Gemma 3: times fp32(sqrt(hidden))
+            if self.embed_scale is not None:                # Gemma 3 / 4: times fp32(sqrt(hidden))
                 x = x * self.embed_scale
             a = m["x0_off"] + (t + i) * m["x0_ld"]
             dev.mem[a:a + 4 * self.H] = np.frombuffer(x.tobytes(), np.uint8)
             dev.to_dev(a, 4 * self.H)
+            if self.ple is not None:
+                p = (self.ple[token].astype(np.uint32) << 16).view(np.float32) * self.ple_scale
+                pa = m["ple0_off"] + (t + i) * m["ple0_ld"]
+                dev.mem[pa:pa + 4 * self.ple_cols] = np.frombuffer(p.tobytes(), np.uint8)
+                dev.to_dev(pa, 4 * self.ple_cols)
 
     def _run(self, queues, off: int, n: int, what: str) -> int:
         """Run n descriptors from queues[off:]; a queue longer than the queue region goes in parts

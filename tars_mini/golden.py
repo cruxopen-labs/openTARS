@@ -76,12 +76,14 @@ class Machine:
         c, e = d["CTRL"], d["EPI"]
         qmode, sym, adt, wdt, fus = c & 7, c >> 3 & 1, c >> 4 & 15, c >> 8 & 15, c >> 12 & 1
         act, out, bias = C.act_of(e), e >> 2 & 3, e >> 4 & 1
+        # W4A16 shares the QM_GROUP encoding but not the legacy INT8 row-scale layout.
+        w4 = op == C.OP_GEMM and qmode == C.QM_GROUP and wdt == C.DT_INT4
         # HDR_RSV / GROUP_SIZE: conv geometry; v0.4: GEMM row-scale offset (QM_ROWCOL), ELT
         # broadcast modes and B stride, ROPE rows per position, FDOT B stride; 0 elsewhere
-        hdr_ok = conv or (op == C.OP_GEMM and qmode == C.QM_ROWCOL) \
+        hdr_ok = conv or (op == C.OP_GEMM and qmode == C.QM_ROWCOL and not w4) \
             or (op == C.OP_ELT and d["HDR_RSV"] < 16) \
             or (op == C.OP_FDOT and c & 1 and d["HDR_RSV"] == C.STATE_FP16)
-        grp_ok = conv or op in C.V04_OPS
+        grp_ok = conv or op in C.V04_OPS or w4
         if d["CORE_ID"] != self.core_id or d["DEP_SIG"] or (d["HDR_RSV"] and not hdr_ok) \
                 or (d["GROUP_SIZE"] and not grp_ok):
             return C.E_FIELD, d
@@ -91,7 +93,11 @@ class Machine:
             return C.E_FIELD, d
         gemm = op == C.OP_GEMM or conv
         if gemm:
-            if qmode not in (C.QM_TENSOR, C.QM_CHANNEL, C.QM_ROWCOL) or sym != 1 \
+            if w4:
+                if sym != 1 or adt not in (C.DT_FP32, C.DT_BF16) or d["HDR_RSV"] != 0 \
+                        or d["GROUP_SIZE"] != C.W4_GROUP:
+                    return C.E_FIELD, d
+            elif qmode not in (C.QM_TENSOR, C.QM_CHANNEL, C.QM_ROWCOL) or sym != 1 \
                     or adt != C.DT_INT8 or wdt != C.DT_INT8 or (conv and qmode == C.QM_ROWCOL):
                 return C.E_FIELD, d
             if (act != C.ACT_NONE) != (fus == 1):
@@ -133,6 +139,12 @@ class Machine:
         M, N, K = d["M"], d["N"], d["K"]
         if M == 0 or N == 0 or N % 16 or ((gemm or op == C.OP_FDOT) and (K == 0 or K % 16)):
             return C.E_ALIGN, d
+        # W4A16: K is a multiple of 256 (a wide W beat of 128 B holds two whole groups of one
+        # row: a row's K / 2 bytes must be a multiple of 128) and at most 8192 (the X banks);
+        # the weights start on a 128-byte boundary (a wide W beat reads a whole 128-byte page)
+        if w4 and (K < 2 * C.W4_GROUP or K % (2 * C.W4_GROUP) or K > 64 * C.W4_GROUP
+                   or d["W_OFF"] % 128):
+            return C.E_ALIGN, d
         if op == C.OP_ROPE and (K == 0 or K % 32 or K > N):
             return C.E_ALIGN, d
         if conv:
@@ -170,7 +182,9 @@ class Machine:
         """(lda, ldy, input row bytes, output row bytes); a zero stride field means dense."""
         out = d["EPI"] >> 2 & 3
         op = d["OPCODE"]
-        arow = d["K"] if op == C.OP_GEMM else C.conv_params(d)["Cin"] if op in C.CONV_OPS \
+        w4 = op == C.OP_GEMM and d["CTRL"] & 7 == C.QM_GROUP and d["CTRL"] >> 8 & 15 == C.DT_INT4
+        aes = 4 if d["CTRL"] >> 4 & 15 == C.DT_FP32 else 2
+        arow = aes * d["K"] if w4 else d["K"] if op == C.OP_GEMM else C.conv_params(d)["Cin"] if op in C.CONV_OPS \
             else 4 * d["K"] if op == C.OP_FDOT else \
             (2 if op == C.OP_ELT and d["HDR_RSV"] & C.STATE_FP16 else 4) * d["N"]
         yrow = d["N"] * C.ESIZE.get(out, 4)
@@ -216,12 +230,15 @@ class Machine:
         else:
             reads = [strided(d["A_OFF"], lda, arow)]
         if d["OPCODE"] in (C.OP_GEMM,) + C.CONV_OPS:
+            w4 = d["OPCODE"] == C.OP_GEMM and d["CTRL"] & 7 == C.QM_GROUP \
+                and d["CTRL"] >> 8 & 15 == C.DT_INT4
             ns = 1 if (d["CTRL"] & 7) == C.QM_TENSOR else N
-            reads.append([(B + d["W_OFF"], B + d["W_OFF"] + N * K)])
-            reads.append([(B + d["SCALE_OFF"], B + d["SCALE_OFF"] + 4 * ns)])
+            reads.append([(B + d["W_OFF"], B + d["W_OFF"] + N * K // (2 if w4 else 1))])
+            reads.append([(B + d["SCALE_OFF"], B + d["SCALE_OFF"] +
+                           (2 * N * (K // C.W4_GROUP) if w4 else 4 * ns))])
             if d["EPI"] >> 4 & 1:
                 reads.append([(B + d["BIAS_OFF"], B + d["BIAS_OFF"] + 4 * N)])
-            if (d["CTRL"] & 7) == C.QM_ROWCOL:
+            if (d["CTRL"] & 7) == C.QM_ROWCOL and not w4:
                 r0 = B + 16 * d["HDR_RSV"]
                 reads.append([(r0, r0 + 4 * M)])
         elif d["OPCODE"] == C.OP_ROW and d["CTRL"] & 7 in (C.ROW_LAYERNORM, C.ROW_RMSNORM, C.ROW_L2NORM):
@@ -275,8 +292,42 @@ class Machine:
                       for oy in range(g["OH"]) for ox in range(g["OW"])])
         return self._gemm(d, A)
 
+    def _gemm_w4(self, d: dict) -> np.ndarray:
+        """W4A16: on-chip group alignment, exact INT4 x INT16 dots, then four FP32 banks."""
+        B, M, N, K, e = d["BASE_ADDR"], d["M"], d["N"], d["K"], d["EPI"]
+        lda = self.strides(d)[0]
+        adt = d["CTRL"] >> 4 & 15
+        if adt == C.DT_FP32:
+            a = np.stack([np.frombuffer(self.read(B + d["A_OFF"] + m * lda, 4 * K), "<f4")
+                          for m in range(M)]).astype(F.F32)
+        else:
+            a = np.stack([F.bf16_bits_to_f32(np.frombuffer(self.read(B + d["A_OFF"] + m * lda, 2 * K), "<u2"))
+                          for m in range(M)])
+        aq, asc = F.align_w4_groups(a)
+        aq = aq.reshape(M, K // C.W4_GROUP, C.W4_GROUP).astype(np.int64)
+        packed = np.frombuffer(self.read(B + d["W_OFF"], N * K // 2), np.uint8).reshape(N, K // 2)
+        lo, hi = (packed & 15).astype(np.int16), (packed >> 4).astype(np.int16)
+        lo, hi = np.where(lo >= 8, lo - 16, lo), np.where(hi >= 8, hi - 16, hi)
+        w = np.stack((lo, hi), axis=2).reshape(N, K // C.W4_GROUP, C.W4_GROUP).astype(np.int64)
+        ws = F.from_fp16_bits(np.frombuffer(self.read(B + d["SCALE_OFF"], 2 * N * (K // C.W4_GROUP)), "<u2")
+                              .reshape(N, K // C.W4_GROUP))
+        acc = np.zeros((M, N, 4), F.F32)
+        for g in range(K // C.W4_GROUP):
+            dot = np.einsum("mk,nk->mn", aq[:, g], w[:, g])
+            term = F.fmul(F.fmul(F.i2f(dot), ws[None, :, g]), asc[:, None, g])
+            acc[:, :, g % 4] = F.fadd(acc[:, :, g % 4], term)
+        y = F.fadd(F.fadd(acc[:, :, 0], acc[:, :, 1]), F.fadd(acc[:, :, 2], acc[:, :, 3]))
+        if e >> 4 & 1:
+            bias = np.frombuffer(self.read(B + d["BIAS_OFF"], 4 * N), "<f4").astype(F.F32)
+            y = F.fadd(y, np.broadcast_to(bias, (M, N)))
+        y = F.act_fn(y, C.act_of(e))
+        return self._convert(y, e >> 2 & 3, d["OUT_SCALE"])
+
     def _gemm(self, d: dict, A: np.ndarray | None = None) -> np.ndarray:
         B, M, N, K, e = d["BASE_ADDR"], d["M"], d["N"], d["K"], d["EPI"]
+        if d["OPCODE"] == C.OP_GEMM and d["CTRL"] & 7 == C.QM_GROUP \
+                and d["CTRL"] >> 8 & 15 == C.DT_INT4:
+            return self._gemm_w4(d)
         lda = self.strides(d)[0]
         if A is None:
             A = np.stack([np.frombuffer(self.read(B + d["A_OFF"] + m * lda, K), np.int8)

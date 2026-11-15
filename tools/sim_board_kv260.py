@@ -25,10 +25,10 @@ BITSTREAM = dict(VG=1, NB=4, OT=32, HB=256, OQ=32, LG=4, VQMIN=128)   # rtl/tm_k
 
 
 class RtlDev:
-    params = dict(backend="RTL (tb_kv260)", version=0x30400)
+    params = dict(backend="RTL (tb_kv260)", version=0x30500)
 
-    def __init__(self, work: Path):
-        self.mem = np.zeros(B.MEM, np.uint8)
+    def __init__(self, work: Path, mem: int = B.MEM):
+        self.mem = np.zeros(mem, np.uint8)
         self.work = work
 
     def to_dev(self, a, n):
@@ -58,7 +58,7 @@ def main() -> int:
     exp = next(c for c in json.loads((Path(args.data) / "expected.json").read_text()) if c["name"] == args.check)
     ok = True
     with tempfile.TemporaryDirectory(dir=ROOT / "build") as td:
-        dev = RtlDev(Path(td))
+        dev = RtlDev(Path(td), mem=B.manifest_mem(args.data))
         m = B.Qwen(dev, args.data, log=lambda *a, **k: None)
         m.new_conversation()
         for s in exp["steps"][:args.steps]:

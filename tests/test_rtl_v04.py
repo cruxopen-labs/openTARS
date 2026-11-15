@@ -638,3 +638,46 @@ def test_mtp_speculative_on_rtl(state_dtype):
     ids, _, rounds = low.generate_mtp(run, [7, 1000, 42], 3, oracle)
     assert rounds >= 2 and len(ids) >= 7
 
+
+def test_gemma4_model_greedy_on_rtl():
+    """Gemma 4 (sliding + full + KV-shared + double-wide MLP + PLE + layer_scalar + NPU softcapped
+    head, keep_layers=False): greedy prefill 3 + 2 decode steps on RTL vs golden model, byte-exact."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(dict(Q.CFG_G4_SMALL, intermediate_size=512, hidden_size_per_layer_input=64),
+                        ["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
+                        vocab=1024)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=8, ddr_bytes=1 << 24, head=True, queue_cap=2048,
+                         scratch_bytes=1 << 20, keep_layers=False)
+
+    def run(ddr, q, n):
+        st, r = both(bytes(ddr), q, n, stall=10, lat=3)
+        assert st.done
+        return r.ddr
+    ids, _, _ = low.generate(run, [7, 500, 42], 2)
+    assert len(ids) == 6
+
+
+@pytest.mark.skipif(rtlsim.TOP != "kv260", reason="TM_TOP=kv260 page-table test")
+def test_kv260_2048_slot_page_table_on_rtl():
+    """Exercise 1536 scrambled 4 KB pages (LPT=11, DPT=2048 BRAM page table) across high offsets."""
+    size = 1536 * 4096                                # pb=12 -> NP=1536 pages (1536 % 5 != 0)
+    rng = np.random.default_rng(3500)
+    ddr = bytearray(size)
+    # Place operands and output near the top of the 1536-page address space (PTE indices > 1024)
+    qa = size - 4096
+    a_off, b_off, y_off = size - 6 * 4096, size - 4 * 4096, size - 2 * 4096
+    a = rng.standard_normal((8, 64), dtype=np.float32)
+    b = rng.standard_normal((8, 64), dtype=np.float32)
+    ddr[a_off:a_off + a.nbytes] = a.tobytes()
+    ddr[b_off:b_off + b.nbytes] = b.tobytes()
+    d0 = T4._desc(OPCODE=C.OP_ELT, CTRL=C.ELT_ADD, M=8, N=64, A_OFF=a_off, W_OFF=b_off, Y_OFF=y_off)
+    d1 = T4._desc(OPCODE=C.OP_ELT, CTRL=C.ELT_ADD, M=1, N=16, A_OFF=a_off, W_OFF=b_off, Y_OFF=size)
+    ddr[qa:qa + 128] = d0 + d1
+    st, r = both(bytes(ddr), qa, 1, stall=35, lat=5)
+    assert st.done and st.err_code == C.E_OK
+    st2, _ = both(bytes(r.ddr), qa + 64, 1, stall=20, lat=3)
+    assert not st2.done and st2.err_code == C.E_RANGE

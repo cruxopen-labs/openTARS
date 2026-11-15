@@ -22,7 +22,7 @@
 // says halted and idle.
 //
 // Registers (byte offsets, 32 bits):
-//   0x000 ID        "TARS" (0x54415253)          0x004 VERSION  0x00030400
+//   0x000 ID        "TARS" (0x54415253)          0x004 VERSION  0x00040000 (+1: the W4A16 unit)
 //   0x008 CTRL      [0] start (write 1: a pulse)  [1] core reset (level, 1 = held in reset)
 //   0x00C STATUS    [0] halted [1] done [7:4] err_code [8] bridge idle [9] read error (sticky)
 //                   [10] write error (sticky) [11] core in reset
@@ -54,10 +54,11 @@ module tm_kv260_top #(
   parameter int     LG        = 4,
   parameter int     VQMIN     = 32,
   parameter int     GB        = 4,               // GEMV rows (with 128-byte W beats: 4 x 128 INT8 MACs a cycle)
+  parameter bit     W4X       = 1,               // carry the W4A16 unit (the W4 bitstream; 0: W8A8 only)
   parameter bit     PROFILE   = 1,               // observational counters; disable for area comparison
-  parameter longint MEM_BYTES = 64'h4000_0000,   // 1 GB
+  parameter longint MEM_BYTES = 64'h1_0000_0000, // 4 GB
   parameter int     PAGE_BITS = 21,              // 2 MB pages
-  parameter int     NPT       = 512,             // page table entries (MEM_BYTES >> PAGE_BITS)
+  parameter int     NPT       = 2048,            // page table entries (MEM_BYTES >> PAGE_BITS)
   parameter int     PA_BITS   = 40
 ) (
   input  logic          clk,
@@ -175,6 +176,8 @@ module tm_kv260_top #(
 );
   logic        rp_go, rp_err;                    // returned read data is taken this cycle; an error response among it
   localparam int LPT = $clog2(NPT);
+  localparam int DPT = 1 << LPT;
+  localparam int PW  = PA_BITS - PAGE_BITS;
 
   // ------------------------------------------------------------------ registers
   logic        ctl_rst, start_p, err_r, err_w;
@@ -192,12 +195,12 @@ module tm_kv260_top #(
   logic [31:0] profile_count [10][4];
   assign core_rst = !rstn || ctl_rst;
 
-  // the page table: written here, read by the read and the write address paths
-  logic        pt_we;
-  logic [31:0] pt_wa, pt_wd;
-  logic [31:0] pt_ra [2];
-  logic [31:0] pt_rd [2];
-  tm_lutram #(.W(32), .D(NPT), .NR(2)) u_pt (.clk, .we(pt_we), .wa(pt_wa), .wd(pt_wd), .ra(pt_ra), .rd(pt_rd));
+  // the page table (two BRAM copies): written here while halted, read by the read and write paths
+  logic           pt_we;
+  logic [LPT-1:0] pt_wa, pt0_ra, pt1_ra;
+  logic [PW-1:0]  pt_wd, pt0_rd, pt1_rd;
+  tm_bram #(.W(PW), .D(DPT)) u_pt0 (.clk, .we(pt_we), .wa(pt_wa), .wd(pt_wd), .ra(pt0_ra), .rd(pt0_rd));
+  tm_bram #(.W(PW), .D(DPT)) u_pt1 (.clk, .we(pt_we), .wa(pt_wa), .wd(pt_wd), .ra(pt1_ra), .rd(pt1_rd));
 
   // write: address and data both present, one response
   logic        aw_ok;
@@ -207,9 +210,9 @@ module tm_kv260_top #(
   assign s_axil_wready  = aw_ok;
   assign s_axil_bresp   = 2'b00;
   assign wa             = {s_axil_awaddr[13:2], 2'b00};
-  assign pt_we          = aw_ok && wa[13];
-  assign pt_wa          = 32'(wa[12:2]);
-  assign pt_wd          = s_axil_wdata;
+  assign pt_we          = aw_ok && wa[13] && 32'(wa[12:2]) < 32'(NPT);
+  assign pt_wa          = wa[2 +: LPT];
+  assign pt_wd          = s_axil_wdata[PW-1:0];
 
   always_ff @(posedge clk) begin
     if (!rstn) begin
@@ -245,7 +248,7 @@ module tm_kv260_top #(
         s_axil_rvalid <= 1'b1;
         case ({s_axil_araddr[13:2], 2'b00})
           14'h000: s_axil_rdata <= 32'h5441_5253;
-          14'h004: s_axil_rdata <= 32'h0003_0400;
+          14'h004: s_axil_rdata <= 32'h0004_0000 | 32'(W4X);   // bit 0: the W4A16 unit is present
           14'h008: s_axil_rdata <= {30'b0, ctl_rst, 1'b0};
           14'h00C: s_axil_rdata <= {20'b0, core_rst, err_w, err_r, br_idle, err_code, 2'b0, done, halted};
           14'h010: s_axil_rdata <= op_idx;
@@ -286,7 +289,7 @@ module tm_kv260_top #(
   logic [895:0]  mr_rhi;
   logic [15:0]   mw_strb;
   tm_core #(.R(R), .C(C), .MEM_BYTES(MEM_BYTES), .NB(NB), .OT(OT), .HB(HB), .VG(VG), .LG(LG), .OQ(OQ),
-            .VQMIN(VQMIN), .GB(GB), .RW(8), .ARR(0)) u_core (
+            .VQMIN(VQMIN), .GB(GB), .RW(8), .ARR(0), .W4XD(64), .W4MB(1)) u_core (
     .clk, .rst(core_rst), .start(start_p), .q_addr, .q_len, .halted, .done, .err_code, .op_idx, .cycles, .profile_class,
     .mr_req, .mr_addr, .mr_wide, .mr_ready, .mr_rvalid, .mr_rdata, .mr_rhi,
     .mw_req, .mw_addr, .mw_data, .mw_strb, .mw_ready);
@@ -328,9 +331,10 @@ module tm_kv260_top #(
   // beats on W, and the slot is free at its response (B: in order, one ID). A write never joins
   // the open slot at the 16 bytes a read in the input register waits on: that read is older than
   // the write and must not see it.
-  logic [LW-1:0]  wb_b [NW];                   // a slot's first beat, its address, its beats
-  logic [63:0]    wb_a [NW];
-  logic [LNM-1:0]  wb_n [NW];
+  logic [LW-1:0]  wb_b [NW];                   // a slot's first beat, its page offset, its PPN, its beats
+  logic [PAGE_BITS-1:0] wb_a [NW];
+  logic [PW-1:0]  wb_ppn [NW];
+  logic [LNM-1:0] wb_n [NW];
   logic [LH-1:0]  wb_h [NW];                   // ... the 16-byte units it writes: from wb_h, wb_m of them
   logic [7:0]     wb_m [NW];
   logic [LH-1:0]  w_h16, in_h16;               // the write's 16-byte unit; the read's (its first)
@@ -344,8 +348,8 @@ module tm_kv260_top #(
   logic [31:0]    lb_s, w_s32;
   logic [255:0]   w_d32;                       // the core's 16-byte write placed in its half of the beat
   logic [LW-1:0]  w_beat;
-  logic           w_take, w_blk, j_same, j_next, w_cls, aw_go;
-  logic [LNW-1:0] aw_s;
+  logic           w_take, w_blk, j_same, j_next, w_cls, w_open, pt1_v, aw_go;
+  logic [LNW-1:0] aw_s, pt1_s;
   logic [15:0]  rd_out;                        // read beats asked for (AR queued), not yet returned
   logic         w_war;
 
@@ -414,8 +418,8 @@ module tm_kv260_top #(
   logic                cl_go, ch_go;           // channel L / H takes a half
   logic [1:0]          cl_s, ch_s, cl_pri, ch_pri;   // its port; the one preferred next
 
-  assign pt_ra[0] = 32'(in_addr[PAGE_BITS +: LPT]);
-  assign pt_ra[1] = 32'(wb_a[aw_s][PAGE_BITS +: LPT]);
+  assign pt0_ra = (mr_req && mr_ready) ? mr_addr[PAGE_BITS +: LPT] : in_addr[PAGE_BITS +: LPT];
+  assign pt1_ra = mw_addr[PAGE_BITS +: LPT];
 
   assign in_b   = in_addr[LA+6:7];
   assign in_h16 = in_addr[LA+6:4];
@@ -569,7 +573,7 @@ module tm_kv260_top #(
           g_ls[hi] <= a_tl[LR-1:0]; g_lm[hi] <= in_m;
         end else begin
           g_v[fg] <= 1'b1; g_b[fg] <= in_b; g_nx[fg] <= in_b + LA'(1); g_n[fg] <= LN'(1); g_age[fg] <= '0;
-          g_pa[fg] <= xlate(in_addr, pt_rd[0], 7); g_bf[fg] <= nbf; g_ls[fg] <= a_tl[LR-1:0]; g_lm[fg] <= in_m;
+          g_pa[fg] <= xlate(in_addr, 32'(pt0_rd), 7); g_bf[fg] <= nbf; g_ls[fg] <= a_tl[LR-1:0]; g_lm[fg] <= in_m;
         end
       end
       // bursts on the bus: per port, their slot lists in AR order; a list is free once its last
@@ -626,8 +630,9 @@ module tm_kv260_top #(
   assign w_cls         = wo_v && !(w_take && (j_same || j_next)) &&
                          (w_take || 32'(wo_age) >= GT - 1 || (in_v && in_old[w_op] &&
                           ovq(in_h16, in_nq, wb_h[w_op], wb_m[w_op])));
+  assign w_open        = w_take && !(j_same || j_next);
   assign m_axi_awvalid = aw_go;
-  assign m_axi_awaddr  = xlate(wb_a[aw_s], pt_rd[1], 5);
+  assign m_axi_awaddr  = xlate(64'(wb_a[aw_s]), 32'(wb_ppn[aw_s]), 5);
   assign m_axi_awlen   = 8'(wb_n[aw_s] - LNM'(1));
   assign m_axi_bready  = 1'b1;
 
@@ -661,9 +666,12 @@ module tm_kv260_top #(
   always_ff @(posedge clk) begin
     if (!rstn) begin
       ws_v <= '0; w_hd <= '0; w_aw <= '0; w_rp <= '0; w_tl <= '0; wo_v <= 1'b0; w_rk <= '0;
-      wd_rv <= 1'b0; wf_n <= '0; wf_h <= '0; wf_t <= '0; rd_out <= '0;
+      pt1_v <= 1'b0; wd_rv <= 1'b0; wf_n <= '0; wf_h <= '0; wf_t <= '0; rd_out <= '0;
     end else begin
       ws_v <= ws_nv;
+      pt1_v <= w_open;
+      if (w_open) pt1_s <= w_tl[LNW-1:0];
+      if (pt1_v) wb_ppn[pt1_s] <= pt1_rd;
       if (wo_v && !(w_take && (j_same || j_next)) && wo_age != '1) wo_age <= wo_age + 3'd1;
       if (w_take) begin
         if (j_same) begin
@@ -676,7 +684,7 @@ module tm_kv260_top #(
           lb_d <= w_d32; lb_s <= w_s32; wb_n[w_op] <= wb_n[w_op] + LNM'(1); wo_age <= '0;
           wb_m[w_op] <= 8'(w_h16 - wb_h[w_op]) + 8'd1;
         end else begin                    // a new slot (the open one, if any, closes: its last beat is written)
-          wb_b[w_tl[LNW-1:0]] <= w_beat; wb_a[w_tl[LNW-1:0]] <= mw_addr; wb_n[w_tl[LNW-1:0]] <= LNM'(1);
+          wb_b[w_tl[LNW-1:0]] <= w_beat; wb_a[w_tl[LNW-1:0]] <= mw_addr[PAGE_BITS-1:0]; wb_n[w_tl[LNW-1:0]] <= LNM'(1);
           wb_h[w_tl[LNW-1:0]] <= w_h16; wb_m[w_tl[LNW-1:0]] <= 8'd1;
           lb_d <= w_d32; lb_s <= w_s32; wo_v <= 1'b1; w_op <= w_tl[LNW-1:0]; wo_age <= '0;
           w_tl <= w_tl + (LNW + 1)'(1);

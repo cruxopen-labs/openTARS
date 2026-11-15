@@ -71,7 +71,8 @@ def main() -> int:
     from tokenizers import Tokenizer
     d = Path(a.data)
     tk = Tokenizer.from_file(str(d / "tokenizer.json"))
-    dev = B.Golden() if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga()
+    mb = B.manifest_mem(d)
+    dev = B.Golden(mem=mb) if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga(mem_bytes=mb)
     m = B.Qwen(dev, d, log=lambda *x, **k: None)
     eos = set(m.m["eos_ids"])
     print(f"{'prompt':10s} {'tok':>4s} {'same':>5s} {'hit':>5s} {'plain ms/tok':>13s} {'mtp ms/tok':>11s} {'cycles x':>9s} "

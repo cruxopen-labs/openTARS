@@ -10,14 +10,16 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0 $*"; exit 1; }
 FW=/lib/firmware/xilinx/tars_kv260
-MODELS="qwen3.5 qwen3.5-mtp qwen3 gemma3"
+MODELS="qwen3.5 qwen3.5-mtp qwen3 gemma3 gemma4 gemma4-w4"
 USAGE="usage: $0 [$(echo $MODELS | tr ' ' '|')] [chat|selftest|quick|hw|bench|profile|precision] [args]"
 DATA=()                                    # no model given: each program's own default
 case "${1:-}" in
-  qwen3.5)     DATA=(--data data);        shift ;;
-  qwen3.5-mtp) DATA=(--data data_mtp);    shift ;;
-  qwen3)       DATA=(--data data_qwen3);  shift ;;
-  gemma3)      DATA=(--data data_gemma3); shift ;;
+  qwen3.5)     DATA=(--data data);           shift ;;
+  qwen3.5-mtp) DATA=(--data data_mtp);       shift ;;
+  qwen3)       DATA=(--data data_qwen3);     shift ;;
+  gemma3)      DATA=(--data data_gemma3);    shift ;;
+  gemma4)      DATA=(--data data_gemma4);    shift ;;
+  gemma4-w4)   DATA=(--data data_gemma4_w4); shift ;;
   -h|--help|help) echo "$USAGE"; exit 0 ;;
 esac
 if [ ${#DATA[@]} -gt 0 ] && [ ! -f "${DATA[1]}/manifest.json" ]; then

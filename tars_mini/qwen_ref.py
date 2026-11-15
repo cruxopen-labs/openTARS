@@ -58,6 +58,28 @@ CFG_G3_1B = dict(
 )
 CFG_G3_SMALL = dict(CFG_G3_1B, hidden_size=256, intermediate_size=512, num_attention_heads=4,
                     num_key_value_heads=2, head_dim=64, query_pre_attn_scalar=64, sliding_window=64)
+# Gemma 4 E2B (google/gemma-4-E2B-it config.json, text_config): 35 layers, four sliding-window (512)
+# layers to one full-attention layer, 8 query heads / 1 KV head, head_dim 256 (sliding) / 512 (full),
+# proportional 25 % RoPE on full layers, KV sharing across the last 20 layers (double-wide MLP 12288),
+# per-layer embeddings (ple_dim 256), V-norm without scale, layer_scalar, softcapped tied head (30.0)
+VOCAB_G4_E2B = 262144
+LAYERS_G4_E2B = (["sliding_attention"] * 4 + ["full_attention"]) * 7
+CFG_G4_E2B = dict(
+    model_type="gemma4_text", hidden_size=1536, intermediate_size=6144, num_attention_heads=8,
+    num_key_value_heads=1, head_dim=256, global_head_dim=512, hidden_size_per_layer_input=256,
+    vocab_size_per_layer_input=262144, num_kv_shared_layers=20, use_double_wide_mlp=True,
+    enable_moe_block=False, attention_k_eq_v=False, rms_norm_eps=1e-6, vocab_size=16,
+    sliding_window=512, hidden_activation="gelu_pytorch_tanh", max_position_embeddings=131072,
+    final_logit_softcapping=30.0,
+    rope_parameters={
+        "full_attention": dict(rope_type="proportional", rope_theta=1000000.0, partial_rotary_factor=0.25),
+        "sliding_attention": dict(rope_type="default", rope_theta=10000.0),
+    },
+)
+CFG_G4_SMALL = dict(CFG_G4_E2B, hidden_size=256, intermediate_size=512, num_attention_heads=4,
+                    num_key_value_heads=1, head_dim=64, global_head_dim=128,
+                    hidden_size_per_layer_input=128, vocab_size_per_layer_input=16,
+                    num_kv_shared_layers=2, sliding_window=64)
 # A small config with the same structure, for RTL runs
 # (16 linear-attention heads as the real model; head dims kept multiples of 16 and the rotary
 # width a multiple of 32, as the contract needs)
@@ -80,7 +102,25 @@ def is_gemma3(cfg) -> bool:
     return getattr(cfg, "model_type", "") == "gemma3_text"
 
 
+def is_gemma4(cfg) -> bool:
+    return getattr(cfg, "model_type", "") == "gemma4_text"
+
+
 def make_config(base: dict, layer_types: list[str] | None = None, vocab: int | None = None):
+    if base.get("model_type") == "gemma4_text":
+        from transformers.models.gemma4 import Gemma4TextConfig
+        b = {k: v for k, v in base.items() if k != "model_type"}
+        lt = list(layer_types or ["sliding_attention", "full_attention", "sliding_attention", "full_attention"])
+        vs = vocab or b["vocab_size"]
+        vs_ple = vs if vocab is not None or b.get("vocab_size_per_layer_input") == b["vocab_size"] \
+            else b["vocab_size_per_layer_input"]
+        n_shared = min(b.get("num_kv_shared_layers", 0), max(0, len(lt) - 2))
+        cfg = Gemma4TextConfig(
+            **dict(b, vocab_size=vs, vocab_size_per_layer_input=vs_ple, num_kv_shared_layers=n_shared,
+                   tie_word_embeddings=True),
+            num_hidden_layers=len(lt), layer_types=lt)
+        cfg._attn_implementation = "eager"
+        return cfg
     if base.get("model_type") == "gemma3_text":
         from transformers.models.gemma3.configuration_gemma3 import Gemma3TextConfig
         b = {k: v for k, v in base.items() if k != "model_type"}
@@ -106,13 +146,16 @@ def make_config(base: dict, layer_types: list[str] | None = None, vocab: int | N
     return cfg
 
 
-def _meta_model(cfg):
-    """The model's structure without memory (parameter names and shapes)."""
+def _meta_model(cfg, dtype: str = "fp32"):
+    """The model's structure without memory (parameter names and shapes); `dtype` selects the
+    reference computation's float type ("fp32" or "bfloat16")."""
     torch = _torch()
     if is_qwen3(cfg):
         from transformers.models.qwen3.modeling_qwen3 import Qwen3Model as M
     elif is_gemma3(cfg):
         from transformers.models.gemma3.modeling_gemma3 import Gemma3TextModel as M
+    elif is_gemma4(cfg):
+        from transformers.models.gemma4 import Gemma4TextModel as M
     else:
         from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextModel as M
     with torch.device("meta"):
@@ -128,7 +171,7 @@ def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndar
     m = _meta_model(cfg)
     rng = np.random.default_rng(seed)
     w = {}
-    for name, p in m.named_parameters():
+    for name, p in m.state_dict().items():
         shape = tuple(p.shape)
         if name.startswith("embed_tokens"):
             if embed:
@@ -143,11 +186,11 @@ def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndar
             a = rng.normal(0, 0.3, shape)
         elif name.endswith("A_log"):
             a = np.log(rng.uniform(1, 16, shape))
-        elif name.endswith("dt_bias"):
+        elif name.endswith("dt_bias") or name.endswith(".layer_scalar"):
             a = rng.uniform(0.5, 1.5, shape)
         elif name.endswith("linear_attn.norm.weight"):
             a = 1 + rng.normal(0, 0.1, shape)
-        elif is_qwen3(cfg):                          # Qwen3: RMSNorm weights around 1
+        elif is_qwen3(cfg) or is_gemma4(cfg):        # Qwen3 / Gemma 4: RMSNorm weights around 1
             a = 1 + rng.normal(0, 0.1, shape)
         else:                                        # zero-centered RMSNorm weights
             a = rng.normal(0, 0.1, shape)
@@ -155,11 +198,11 @@ def random_weights(cfg, seed: int = 0, embed: bool = False) -> dict[str, np.ndar
     return w
 
 
-CKPT_PREFIX = "model.language_model."     # Qwen3_5ForConditionalGeneration's text model
+CKPT_PREFIX = "model.language_model."     # Qwen3_5 / Gemma4 conditional generation text model
 CKPT_PREFIX_Q3 = "model."                 # Qwen3ForCausalLM's (and Gemma3ForCausalLM's)
 
 
-def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
+def load_weights(path, cfg, embed: bool = False, ple_embed: bool | None = None) -> dict[str, np.ndarray]:
     """A Hugging Face checkpoint's text-model weights (a directory of safetensors, any float
     dtype) as fp32, under the names random_weights uses; bf16 to fp32 is exact. The vision tower
     and the MTP head are not loaded. Every parameter of the model's structure must be present
@@ -167,20 +210,30 @@ def load_weights(path, cfg, embed: bool = False) -> dict[str, np.ndarray]:
     from pathlib import Path
     from safetensors import safe_open
     torch = _torch()
-    shapes = {n: tuple(p.shape) for n, p in _meta_model(cfg).named_parameters()}
-    pre = CKPT_PREFIX_Q3 if is_qwen3(cfg) or is_gemma3(cfg) else CKPT_PREFIX
+    if ple_embed is None:
+        ple_embed = embed
+    shapes = {n: tuple(p.shape) for n, p in _meta_model(cfg).state_dict().items()}
+    prefixes = (CKPT_PREFIX_Q3,) if is_qwen3(cfg) or is_gemma3(cfg) else (CKPT_PREFIX, CKPT_PREFIX_Q3)
+
+    def wanted(n: str) -> bool:
+        if n == "embed_tokens.weight":
+            return embed
+        if n == "embed_tokens_per_layer.weight":
+            return ple_embed
+        return True
+
     w = {}
     for f in sorted(Path(path).glob("*.safetensors")):
         with safe_open(str(f), framework="pt") as st:
             for k in st.keys():
-                name = k[len(pre):] if k.startswith(pre) else None
-                if name not in shapes or (name.startswith("embed_tokens") and not embed):
+                name = next((k[len(pre):] for pre in prefixes if k.startswith(pre)), None)
+                if name not in shapes or not wanted(name):
                     continue
                 t = st.get_tensor(k)
                 if tuple(t.shape) != shapes[name]:
                     raise ValueError(f"{k}: shape {tuple(t.shape)}, the model needs {shapes[name]}")
                 w[name] = t.to(torch.float32).numpy()
-    missing = [n for n in shapes if n not in w and (embed or not n.startswith("embed_tokens"))]
+    missing = [n for n in shapes if n not in w and wanted(n)]
     if missing:
         raise ValueError(f"checkpoint {path} lacks {missing[:5]} ({len(missing)} parameters)")
     return w
@@ -225,6 +278,13 @@ def random_inputs(cfg, n_tokens: int, seed: int = 1) -> np.ndarray:
     return x.astype(np.float32)
 
 
+def random_ple_inputs(cfg, n_tokens: int, seed: int = 2) -> np.ndarray:
+    """Gemma 4 per-layer token embeddings [T, L * ple_dim] for block tests without embed_tokens."""
+    rng = np.random.default_rng(seed)
+    cols = cfg.num_hidden_layers * cfg.hidden_size_per_layer_input
+    return rng.normal(0, 0.3, (n_tokens, cols)).astype(np.float32)
+
+
 # ---------------------------------------------------------------------- the W8A8 linear
 def quant_tokens(x):
     """Per-token symmetric INT8 as TARS-mini's ROW_QUANT (fp32 steps, see numerics.quant_rows)."""
@@ -245,42 +305,60 @@ class Run:
 
 
 def run_reference(cfg, weights: dict, x: np.ndarray, chunks: list[int], fake_quant: bool,
-                  head: bool = False) -> Run:
+                  head: bool = False, ple: np.ndarray | None = None, wbits: int = 8,
+                  dtype: str = "fp32") -> Run:
     """Feed x (input embeddings) in chunks (the first is the prefill, then e.g. 1-token decode
     steps) through the layers with a cache; collect each layer's output and the final-norm
     output per chunk, and with `head` the last token's logits (the tied embedding; W8A8 as the
     linears when fake_quant). The model shares the weights' memory."""
     torch = _torch()
     from transformers.cache_utils import DynamicCache
-    m = _meta_model(cfg)
-    m.load_state_dict({k: torch.from_numpy(v) for k, v in weights.items() if not k.startswith("embed_tokens")},
-                      strict=False, assign=True)
+    m = _meta_model(cfg, dtype)
+    td = torch.bfloat16 if dtype == "bfloat16" else torch.float32
+    m.load_state_dict({k: torch.from_numpy(v).to(td) for k, v in weights.items()
+                       if not k.startswith("embed_tokens")}, strict=False, assign=True)
+    if is_gemma4(cfg):
+        m.per_layer_model_projection_scale = torch.tensor(float(cfg.hidden_size) ** -0.5, dtype=td)
+        m.per_layer_input_scale = torch.tensor(2.0 ** -0.5, dtype=td)
     m.rotary_emb = type(m.rotary_emb)(config=cfg)              # its buffers, off the meta device
     m.eval()
     if fake_quant:
         for mod in m.modules():
             if isinstance(mod, torch.nn.Linear):
-                _fake_quant_linear(mod)
+                _fake_quant_linear(mod, wbits)
     hw = None
+    softcap = getattr(cfg, "final_logit_softcapping", None)
     if head:
         e = weights["embed_tokens.weight"]
         hr = head_rows(e.shape[0])
-        hw = [quant_weight(e[r:r + hr].astype(np.float64)) for r in range(0, e.shape[0], hr)] \
-            if fake_quant else e
+        if not fake_quant:
+            hw = e
+        elif wbits == 4:
+            from .compiler import quantize_weight4
+            hw = [quantize_weight4(e[r:r + hr].astype(np.float64)) for r in range(0, e.shape[0], hr)]
+        else:
+            hw = [quant_weight(e[r:r + hr].astype(np.float64)) for r in range(0, e.shape[0], hr)]
     outs: list[np.ndarray] = []
-    hooks = [lay.register_forward_hook(lambda _m, _i, o: outs.append(o.detach().numpy().copy()))
+    hooks = [lay.register_forward_hook(lambda _m, _i, o: outs.append(o.detach().float().numpy().copy()))
              for lay in m.layers]
     cache = DynamicCache(config=cfg)
     res, t0 = Run(), 0
     with torch.no_grad():
         for n in chunks:
             outs.clear()
-            y = m(inputs_embeds=torch.from_numpy(x[None, t0:t0 + n]), past_key_values=cache,
-                  use_cache=True).last_hidden_state
+            kw = {}
+            if is_gemma4(cfg):
+                assert ple is not None, "Gemma 4 reference needs ple=[T, L*ple_dim]"
+                kw["per_layer_inputs"] = torch.from_numpy(
+                    ple[t0:t0 + n].reshape(1, n, cfg.num_hidden_layers,
+                                           cfg.hidden_size_per_layer_input)).to(td)
+            y = m(inputs_embeds=torch.from_numpy(x[None, t0:t0 + n]).to(td), past_key_values=cache,
+                  use_cache=True, **kw).last_hidden_state
             res.layer_out.append([o[0] for o in outs])
-            res.final.append(y[0].numpy().copy())
+            res.final.append(y[0].float().numpy().copy())
             if head:
-                res.logits.append(head_logits(y[0, -1].numpy(), hw, fake_quant))
+                res.logits.append(head_logits(y[0, -1].float().numpy(), hw, fake_quant,
+                                              softcap=softcap, wbits=wbits))
             t0 += n
     for h in hooks:
         h.remove()
@@ -300,29 +378,70 @@ def head_rows(vocab: int) -> int:
     raise ValueError(f"vocabulary {vocab}: no block split")
 
 
-def head_logits(y: np.ndarray, hw, fake_quant: bool) -> np.ndarray:
-    """The last token's logits: y (the final norm's output) times the tied embedding, W8A8 per
-    row block as the device computes it, or fp32."""
+def head_logits(y: np.ndarray, hw, fake_quant: bool, softcap: float | None = None,
+                wbits: int = 8) -> np.ndarray:
+    """The last token's logits: y (the final norm's output) times the tied embedding, W8A8 / W4A16
+    per row block as the device computes it, or fp32."""
     if not fake_quant:
-        return (hw.astype(np.float64) @ y.astype(np.float64)).astype(np.float32)
-    q, s = quant_tokens(y[None, :])
-    out = []
-    for qw in hw:
-        acc = qw.q.astype(np.float64) @ q[0].astype(np.float64)              # exact integers
-        out.append((acc * np.float64(s[0]) * qw.scale.astype(np.float64)).astype(np.float32))
-    return np.concatenate(out)
+        lg = (hw.astype(np.float64) @ y.astype(np.float64)).astype(np.float32)
+    elif wbits == 4:
+        out = []
+        for qw in hw:
+            out.append(_w4_matmul(y[None, :], qw)[0])
+        lg = np.concatenate(out)
+    else:
+        q, s = quant_tokens(y[None, :])
+        out = []
+        for qw in hw:
+            acc = qw.q.astype(np.float64) @ q[0].astype(np.float64)              # exact integers
+            out.append((acc * np.float64(s[0]) * qw.scale.astype(np.float64)).astype(np.float32))
+        lg = np.concatenate(out)
+    if softcap is not None:
+        sc = np.float32(softcap)
+        lg = (np.tanh(lg / sc) * sc).astype(np.float32)
+    return lg
 
 
-def _fake_quant_linear(mod) -> None:
+def _w4_matmul(x: np.ndarray, qw) -> np.ndarray:
+    """The W4A16 hardware's linear on x [M, K] (the reference's FP64 mirror of the FP32 epilogue)."""
+    from . import numerics as F
+    from . import contract as C
+    q, xs = F.align_w4_groups(np.asarray(x, np.float32))
+    M, K = q.shape
+    G = K // C.W4_GROUP
+    lo, hi = (qw.q & 15).astype(np.int16), (qw.q >> 4).astype(np.int16)
+    lo, hi = np.where(lo >= 8, lo - 16, lo), np.where(hi >= 8, hi - 16, hi)
+    wq = np.stack((lo, hi), axis=2).reshape(qw.n, G, C.W4_GROUP).astype(np.int64)
+    ws = qw.scale.view(np.float16).astype(np.float32)
+    acc = np.zeros((M, qw.n, 4), np.float32)
+    qg = q.reshape(M, G, C.W4_GROUP).astype(np.int64)
+    for g in range(G):
+        dot = np.einsum("mk,nk->mn", qg[:, g], wq[:, g])
+        term = F.fmul(F.fmul(F.i2f(dot), ws[None, :, g]), xs[:, None, g])
+        acc[:, :, g % 4] = F.fadd(acc[:, :, g % 4], term)
+    y = F.fadd(F.fadd(acc[:, :, 0], acc[:, :, 1]), F.fadd(acc[:, :, 2], acc[:, :, 3]))
+    return y
+
+
+def _fake_quant_linear(mod, wbits: int = 8) -> None:
     torch = _torch()
-    qw = quant_weight(mod.weight.detach().numpy().astype(np.float64))
-    wq = torch.from_numpy(qw.q)                                  # int8: widened per call
-    sc = torch.from_numpy(qw.scale.astype(np.float64))
+    if wbits == 4:
+        from .compiler import quantize_weight4
+        qw = quantize_weight4(mod.weight.detach().numpy().astype(np.float64))
 
-    def fwd(x):
-        shp = x.shape
-        q, s = quant_tokens(x.reshape(-1, shp[-1]).numpy())
-        acc = torch.from_numpy(q.astype(np.float64)) @ wq.double().T        # exact integers
-        y = acc * torch.from_numpy(s.astype(np.float64))[:, None] * sc[None, :]
-        return y.to(torch.float32).reshape(*shp[:-1], -1)
+        def fwd(x):
+            shp = x.shape
+            y = _w4_matmul(x.reshape(-1, shp[-1]).numpy(), qw)
+            return torch.from_numpy(y).reshape(*shp[:-1], -1)
+    else:
+        qw = quant_weight(mod.weight.detach().numpy().astype(np.float64))
+        wq = torch.from_numpy(qw.q)                              # int8: widened per call
+        sc = torch.from_numpy(qw.scale.astype(np.float64))
+
+        def fwd(x):
+            shp = x.shape
+            q, s = quant_tokens(x.reshape(-1, shp[-1]).numpy())
+            acc = torch.from_numpy(q.astype(np.float64)) @ wq.double().T  # exact integers
+            y = acc * torch.from_numpy(s.astype(np.float64))[:, None] * sc[None, :]
+            return y.to(torch.float32).reshape(*shp[:-1], -1)
     mod.forward = fwd

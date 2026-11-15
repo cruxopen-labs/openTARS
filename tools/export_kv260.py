@@ -1,18 +1,22 @@
-"""Export Qwen3.5-0.8B, Qwen3-0.6B or Gemma 3 1B (the checkpoint's config.json model_type picks it) for
-the KV260 board runtime (deploy/kv260/sw/tars_board.py).
+"""Export Qwen3.5-0.8B, Qwen3-0.6B, Gemma 3 1B or Gemma 4 E2B (the checkpoint's config.json
+model_type picks it) for the KV260 board runtime (deploy/kv260/sw/tars_board.py).
 
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3.5-0.8B [--T 256] [--out deploy/kv260/data]
     python3 tools/export_kv260.py --ckpt ~/models/Qwen3-0.6B --out deploy/kv260/data_qwen3
     python3 tools/export_kv260.py --ckpt ~/models/gemma-3-1b-it --out deploy/kv260/data_gemma3  # T <= 512 (its window)
+    python3 tools/export_kv260.py --ckpt ~/models/gemma-4-E2B-it --out deploy/kv260/data_gemma4 # T <= 512 (its window)
+    python3 tools/export_kv260.py --ckpt ~/models/gemma-4-E2B-it --wbits 4 --out deploy/kv260/data_gemma4_w4
     python3 tools/export_kv260.py --mtp --out deploy/kv260/data_mtp  # Qwen3.5 with its MTP head: speculative decoding
     python3 tools/export_kv260.py --out deploy/kv260/data --check-only      # redo the golden check
     python3 tools/export_kv260.py --chunks-only    # add the prefill chunk queues to an export
 
 Writes into --out:
   image.bin        the DDR image from address 0: the zeroed states, the queue region, scratch, the
-                   quantized weights (the core's address space is the board's 1 GB buffer)
+                   quantized weights (the core's address space is mapped onto 2 MB hugepages)
   embed_bf16.bin   the embedding table [vocab, H] as bf16 (the checkpoint's own values: exact; Gemma's
                    input embedding is a row times the manifest's embed_scale, in fp32)
+  ple_bf16.bin     Gemma 4 only: per-layer token embedding table [vocab, L * ple_dim] as bf16,
+                   read via mmap on the host and scaled by ple_scale
   queues.bin       one descriptor queue per token position t (t0 = t, one token), back to back
   queues_c<n>.bin  prefill: one queue per chunk of n tokens at t0 (a multiple of ALIGN): the weights
                    are read once for n tokens; bit-identical to n one-token steps (the same
@@ -32,6 +36,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -44,13 +49,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "deploy" / "kv260" / "sw"))
 
 DDR = 1 << 30
+HPAGE = 2 << 20
 CHUNKS, ALIGN = (8, 4), 4            # prefill chunk sizes (the runtime uses those <= the GEMV rows: 4 from bitstream 3.0, 8 before); chunks start at multiples of ALIGN
 CHECKS = [dict(name="plain", text="The capital of France is", chat=False, new=8),
           dict(name="chat", text="Write one sentence about the Great Wall.", chat=True, new=12)]
 
 
 def model_config(ckpt):
-    """The lowering's config for a checkpoint: Qwen3 (model_type "qwen3") or Qwen3.5."""
+    """The lowering's config for a checkpoint: Qwen3, Gemma 3 1B, Gemma 4 E2B or Qwen3.5."""
     from tars_mini import qwen_ref as Q
     mt = json.loads((Path(ckpt) / "config.json").read_text()).get("model_type", "")
     if mt == "qwen3":
@@ -67,7 +73,69 @@ def model_config(ckpt):
         if diff:
             raise ValueError(f"{ckpt}: not the Gemma 3 1B this export supports: {diff}")
         return cfg
+    if mt in ("gemma4_text", "gemma4"):
+        cfg = Q.make_config(Q.CFG_G4_E2B, Q.LAYERS_G4_E2B, vocab=Q.VOCAB_G4_E2B)
+        from transformers import AutoConfig
+        have = AutoConfig.from_pretrained(ckpt)
+        have = getattr(have, "text_config", have)
+        keys = ("hidden_size", "intermediate_size", "num_attention_heads", "rms_norm_eps", "vocab_size",
+                "layer_types", "hidden_activation", "sliding_window", "hidden_size_per_layer_input",
+                "vocab_size_per_layer_input", "num_kv_shared_layers", "use_double_wide_mlp",
+                "final_logit_softcapping", "rope_parameters")
+        diff = {k: (getattr(have, k, None), getattr(cfg, k)) for k in keys if getattr(have, k, None) != getattr(cfg, k)}
+        hds = ([p.head_dim for p in have.per_layer_config], [p.head_dim for p in cfg.per_layer_config])
+        nkvs = ([p.num_key_value_heads for p in have.per_layer_config],
+                [p.num_key_value_heads for p in cfg.per_layer_config])
+        if hds[0] != hds[1]:
+            diff["per_layer_head_dim"] = hds
+        if nkvs[0] != nkvs[1]:
+            diff["per_layer_num_key_value_heads"] = nkvs
+        if diff:
+            raise ValueError(f"{ckpt}: not the Gemma 4 E2B this export supports: {diff}")
+        return cfg
     return Q.make_config(Q.CFG_08B, Q.LAYERS_08B, vocab=Q.VOCAB_08B)
+
+
+def _share_or_write_ple(ckpt, cfg, out: Path, share_from: str | None) -> tuple[int, int]:
+    """Stream embed_tokens_per_layer.weight [vocab, L * ple_dim] to ple_bf16.bin without holding an
+    8.75 GiB fp32 copy in RAM, or link an existing ple_bf16.bin from --share-from."""
+    from safetensors import safe_open
+    import torch
+    from tars_mini import qwen_ref as Q
+    want = (cfg.vocab_size_per_layer_input, cfg.num_hidden_layers * cfg.hidden_size_per_layer_input)
+    dst = out / "ple_bf16.bin"
+    if share_from:
+        src = Path(share_from) / "ple_bf16.bin"
+        if src.exists() and src.stat().st_size == 2 * want[0] * want[1]:
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            try:
+                os.link(src, dst)
+            except OSError:
+                dst.symlink_to(src.resolve())
+            return want
+    prefixes = (Q.CKPT_PREFIX, Q.CKPT_PREFIX_Q3)
+    for f in sorted(Path(ckpt).glob("*.safetensors")):
+        with safe_open(str(f), framework="pt") as st:
+            for k in st.keys():
+                if not any(k == pre + "embed_tokens_per_layer.weight" for pre in prefixes):
+                    continue
+                sl = st.get_slice(k)
+                shape = tuple(sl.get_shape())
+                if shape != want:
+                    raise ValueError(f"{k}: shape {shape}, expected {want}")
+                with open(dst, "wb") as fp:
+                    for r in range(0, shape[0], 8192):
+                        blk = sl[r:min(shape[0], r + 8192)]
+                        if blk.dtype == torch.bfloat16:
+                            arr = blk.view(torch.uint16).numpy()
+                        else:
+                            bits = np.ascontiguousarray(blk.to(torch.float32).numpy()).view(np.uint32)
+                            assert not (bits & 0xFFFF).any(), "ple embedding is not bf16-exact"
+                            arr = (bits >> 16).astype(np.uint16)
+                        fp.write(arr.tobytes())
+                return want
+    raise ValueError(f"{ckpt}: missing embed_tokens_per_layer.weight")
 
 
 def export(args) -> None:
@@ -77,22 +145,45 @@ def export(args) -> None:
     out.mkdir(parents=True, exist_ok=True)
     t = time.time()
     cfg = model_config(args.ckpt)
-    w = Q.load_weights(args.ckpt, cfg, embed=True)
+    g4 = Q.is_gemma4(cfg)
+    w = Q.load_weights(args.ckpt, cfg, embed=True, ple_embed=False)
     if args.mtp:
         w.update(Q.load_mtp(args.ckpt))
     emb = np.ascontiguousarray(w["embed_tokens.weight"], np.float32)
-    bits = emb.view(np.uint32)
-    assert not (bits & 0xFFFF).any(), "the embedding is not bf16-exact"
-    (bits >> 16).astype(np.uint16).tofile(out / "embed_bf16.bin")
+    emb_dst = out / "embed_bf16.bin"
+    if args.share_from and (Path(args.share_from) / "embed_bf16.bin").exists():
+        src = Path(args.share_from) / "embed_bf16.bin"
+        if src.stat().st_size == 2 * emb.size:
+            if emb_dst.exists() or emb_dst.is_symlink():
+                emb_dst.unlink()
+            try:
+                os.link(src, emb_dst)
+            except OSError:
+                emb_dst.symlink_to(src.resolve())
+        else:
+            args.share_from = None
+    if not (args.share_from and emb_dst.exists()):
+        bits = emb.view(np.uint32)
+        assert not (bits & 0xFFFF).any(), "the embedding is not bf16-exact"
+        (bits >> 16).astype(np.uint16).tofile(emb_dst)
     print(f"embedding {emb.shape} ({time.time() - t:.0f} s)", flush=True)
-    low = L.QwenLowering(cfg, w, max_tokens=args.T, ddr_bytes=DDR, head=True, queue_cap=16384,
-                         verify_rows=2 if args.mtp else 1, mtp=args.mtp, state_dtype=args.state_dtype)
+    if g4:
+        ple_shape = _share_or_write_ple(args.ckpt, cfg, out, args.share_from)
+        print(f"ple embedding {ple_shape} ({time.time() - t:.0f} s)", flush=True)
+    cap_bytes = (3 << 30) if g4 else DDR
+    keep_layers = not g4
+    scratch_bytes = (16 << 20) if g4 else (1 << 22)
+    low = L.QwenLowering(cfg, w, max_tokens=args.T, ddr_bytes=cap_bytes, head=True, queue_cap=16384,
+                         scratch_bytes=scratch_bytes, verify_rows=2 if args.mtp else 1, mtp=args.mtp,
+                         state_dtype=args.state_dtype, keep_layers=keep_layers, wbits=args.wbits)
     del w
     assert low.p.base == 0
     img = bytes(low.p.ddr[:low.end])
     pad = (-len(img)) % (1 << 20)
+    image_bytes = len(img) + pad
+    mem_bytes = max(DDR, ((image_bytes + HPAGE - 1) // HPAGE) * HPAGE)
     (out / "image.bin").write_bytes(img + bytes(pad))
-    print(f"image {len(img) / 2**20:.0f} MiB ({time.time() - t:.0f} s)", flush=True)
+    print(f"image {len(img) / 2**20:.0f} MiB, mem_bytes {mem_bytes >> 20} MiB ({time.time() - t:.0f} s)", flush=True)
     index, off = [], 0
     with open(out / "queues.bin", "wb") as f:
         for t0 in range(args.T):
@@ -114,28 +205,36 @@ def export(args) -> None:
     bos = []
     if tok.bos_token and pre.startswith(tok.bos_token):      # Gemma: <bos> once, at position 0
         pre, bos = pre[len(tok.bos_token):], [int(tok.bos_token_id)]
-    assert bos or not low.gemma, "Gemma's chat template starts with <bos>"
-    turn_end = "<end_of_turn>\n" if low.gemma else "<|im_end|>\n"
+    assert bos or not (low.gemma or low.gemma4), "Gemma's chat template starts with <bos>"
+    turn_end = "<turn|>\n" if low.gemma4 else ("<end_of_turn>\n" if low.gemma else "<|im_end|>\n")
     gen = json.loads((Path(args.ckpt) / "generation_config.json").read_text()) \
         if (Path(args.ckpt) / "generation_config.json").exists() else {}
     eos = gen.get("eos_token_id", [])
     vocab = tok.get_vocab()
     eos = sorted({*(eos if isinstance(eos, list) else [eos]),
-                  *(vocab[s] for s in ("<|im_end|>", "<|endoftext|>", "<end_of_turn>", "<eos>") if s in vocab)}
-                 - {None})
+                  *(vocab[s] for s in ("<|im_end|>", "<|endoftext|>", "<end_of_turn>", "<turn|>", "<eos>")
+                    if s in vocab)} - {None})
     for fn in ("tokenizer.json", "tokenizer_config.json"):
         if (Path(args.ckpt) / fn).exists():
             shutil.copy(Path(args.ckpt) / fn, out / fn)
-    la = not (low.q3 or low.gemma)                           # DeltaNet states: Qwen3.5 only
+    la = not (low.q3 or low.gemma or low.gemma4)             # DeltaNet states: Qwen3.5 only
+    min_fw = max(0x30500 if mem_bytes > DDR else 0, 0x30400 if args.state_dtype == "fp16" and la else 0,
+                 0x00040001 if args.wbits == 4 else 0)   # bit 0: the W4A16 unit is present
     m = dict(model=Path(args.ckpt).resolve().name, max_tokens=args.T, hidden=low.H, vocab=low.vocab,
-             state_dtype=args.state_dtype if la else "fp32",
-             min_firmware=0x30400 if args.state_dtype == "fp16" and la else 0,
+             state_dtype=args.state_dtype if la else "fp32", wbits=args.wbits,
+             min_firmware=min_fw,
+             keep_layers=low.keep_layers,
              bos_ids=bos, turn_end=turn_end,
-             embed_scale=float(L.input_embedding(cfg, np.ones((1, 1), np.float32))[0, 0]) if low.gemma else None,
-             image_bytes=len(img) + pad, state_end=low.scratch_end, qbase=low.qbase,
+             embed_scale=float(L.input_embedding(cfg, np.ones((1, 1), np.float32))[0, 0])
+             if (low.gemma or low.gemma4) else None,
+             image_bytes=image_bytes, state_end=low.scratch_end, qbase=low.qbase,
              queue_cap=low.queue_cap, x0_off=low.x0.off, x0_ld=low.x0.ld, logits_off=low.logits.off,
-             mem_bytes=DDR, chat_prefix=pre, chat_suffix=post, eos_ids=[int(e) for e in eos],
+             mem_bytes=mem_bytes, chat_prefix=pre, chat_suffix=post, eos_ids=[int(e) for e in eos],
              queue_index=index, head_blocks=[lin.n for lin in low.head_lins])
+    if low.ple_dim:
+        m.update(ple_cols=len(low.types) * low.ple_dim,
+                 ple_scale=float(L.ple_embedding(cfg, np.ones((1, 1), np.float32))[0, 0]),
+                 ple0_off=low.ple0.off, ple0_ld=low.ple0.ld)
     (out / "manifest.json").write_text(json.dumps(m))
     print(f"manifest: {({k: v for k, v in m.items() if k != 'queue_index'})}", flush=True)
     export_chunks(low, out, args.T)
@@ -173,13 +272,13 @@ def export_spec(low, out: Path, T: int) -> None:
     (out / "manifest.json").write_text(json.dumps(m))
 
 
-def export_chunks(low, out: Path, T: int) -> None:
+def export_chunks(low, out: Path, T: int, chunks=CHUNKS) -> None:
     """The prefill queues: for each chunk size n, one queue per t0 (a multiple of ALIGN, t0 + n <= T),
     into queues_c<n>.bin; their index into the manifest (chunks: {n: [[t0, offset, count], ...]})."""
     t = time.time()
     m = json.loads((out / "manifest.json").read_text())
     m["chunks"] = {}
-    for n in CHUNKS:
+    for n in chunks:
         index, off = [], 0
         with open(out / f"queues_c{n}.bin", "wb") as f:
             for t0 in range(0, T - n + 1, ALIGN):
@@ -202,9 +301,12 @@ def chunks_only(args) -> None:
     out = Path(args.out)
     m = json.loads((out / "manifest.json").read_text())
     cfg = model_config(args.ckpt)
-    w = Q.load_weights(args.ckpt, cfg, embed=True)          # as export(): the head is tied to it
-    low = L.QwenLowering(cfg, w, max_tokens=m["max_tokens"], ddr_bytes=DDR, head=True, queue_cap=m["queue_cap"],
-                         state_dtype=m.get("state_dtype", "fp32"))
+    g4 = Q.is_gemma4(cfg)
+    w = Q.load_weights(args.ckpt, cfg, embed=True, ple_embed=False)
+    low = L.QwenLowering(cfg, w, max_tokens=m["max_tokens"], ddr_bytes=int(m.get("mem_bytes", DDR)), head=True,
+                         queue_cap=m["queue_cap"], scratch_bytes=(16 << 20) if g4 else (1 << 22),
+                         state_dtype=m.get("state_dtype", "fp32"),
+                         keep_layers=m.get("keep_layers", not g4), wbits=m.get("wbits", 8))
     del w
     img = bytes(low.p.ddr[:low.end])
     have = (out / "image.bin").read_bytes()[:len(img)]
@@ -228,7 +330,7 @@ def selftest(out: Path, n: int = 24) -> None:
         seed += 1
         g = Machine(bytearray(ddr), gemv_only=True)
         st = g.run_queue(QADDR, 8)
-        if st.err_code == C.E_RANGE:          # the board's address space is 1 GB, not the image's size
+        if st.err_code == C.E_RANGE:          # the board's address space is >= 1 GB, not the image's size
             continue
         i = len(cases)
         (d / f"case{i}_in.bin").write_bytes(ddr)
@@ -242,9 +344,8 @@ def selftest(out: Path, n: int = 24) -> None:
 def check(out: Path) -> None:
     import tars_board as B
     from tokenizers import Tokenizer
-    m = json.loads((out / "manifest.json").read_text())
     tk = Tokenizer.from_file(str(out / "tokenizer.json"))
-    dev = B.Golden()
+    dev = B.Golden(mem=B.manifest_mem(out))
     model = B.Qwen(dev, out, log=lambda *a, **k: None)
     res = []
     for c in CHECKS:
@@ -274,6 +375,10 @@ def main() -> int:
     ap.add_argument("--ckpt", default=str(Path.home() / "models" / "Qwen3.5-0.8B"))
     ap.add_argument("--T", type=int, default=256)
     ap.add_argument("--out", default=str(ROOT / "deploy" / "kv260" / "data"))
+    ap.add_argument("--share-from", default=None,
+                    help="hardlink/symlink embed_bf16.bin and ple_bf16.bin from an existing export directory")
+    ap.add_argument("--wbits", type=int, choices=(8, 4), default=8,
+                    help="linear weight bits: 8 = W8A8 (default), 4 = group-128 W4A16 (firmware v4.0)")
     ap.add_argument("--check-only", action="store_true")
     ap.add_argument("--chunks-only", action="store_true")
     ap.add_argument("--mtp", action="store_true", help="Qwen3.5: the MTP head and the speculative queues")

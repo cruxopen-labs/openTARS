@@ -2,11 +2,14 @@
 
 <p align="center"><img src="demo/Qwen3.5-0.8B-Demo.gif" alt="Qwen3.5-0.8B chatting on the KV260" width="720"></p>
 
-An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B, Qwen3-0.6B and Gemma 3 1B bit-exact on
-a Xilinx Kria KV260**: every logit on the board matches the golden model bit for bit. Qwen3-0.6B decodes
-at **0.07 s/token**, Gemma 3 1B at **0.09 s/token** and Qwen3.5-0.8B at **0.13 s/token** on short
-contexts (100 MHz core clock, bitstream v3.3; 2.6 s/token at v1.0), using 90% of the XCK26's LUTs.
-Qwen3.5-0.8B also has optional speculative decoding with its MTP head (same tokens, bit for bit; see below).
+An open-source single-core NPU (TARS) that runs **Qwen3.5-0.8B, Qwen3-0.6B, Gemma 3 1B and
+Gemma 4 E2B bit-exact on a Xilinx Kria KV260**: every logit on the board matches the golden model
+bit for bit. Qwen3-0.6B decodes at **0.07 s/token**, Gemma 3 1B at **0.09 s/token** and
+Qwen3.5-0.8B at **0.13 s/token** on short contexts (100 MHz core clock; 2.6 s/token at v1.0),
+using 90% of the XCK26's LUTs. Bitstream v4.0 adds a 4 GB address space (2,048-entry page table
+in BRAM) and a W4A16 GEMV path (4-bit weights in groups of 128 with FP16 scales, 16-bit block-FP
+activations), which runs Gemma 4 E2B from a 1.21 GiB image instead of 1.9 GiB. Qwen3.5-0.8B also
+has optional speculative decoding with its MTP head (same tokens, bit for bit; see below).
 
 **Demo:** Qwen3.5-0.8B chatting on the KV260 (above; full video: [demo/Qwen3.5-0.8B-Demo.mp4](demo/Qwen3.5-0.8B-Demo.mp4)).
 
@@ -21,6 +24,8 @@ board, 100 MHz core clock, greedy decoding, every step's logits bit-exact agains
 | [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 24: 18 Gated DeltaNet + 6 gated full attention | 887 MiB | 13.2 M cycles = **0.13 s/token** | 1.78 s = 0.089 s/token | 3.7 s |
 | [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) | 28 full attention (GQA 16/8, QK-norm) | 662 MiB | 6.7 M cycles = **0.07 s/token** | 0.58 s = 0.029 s/token | 1.6 s |
 | [Gemma 3 1B](https://huggingface.co/google/gemma-3-1b-it) (it) | 26 attention (GQA 4/1, head 256, QK-norm; local / global RoPE 5:1), GeGLU | 1008 MiB | 9.4 M cycles = **0.09 s/token** | 0.68 s for 17 tokens = 0.040 s/token | 2.0 s (28 positions) |
+| [Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B-it) (it, W8A8, T=512) | 35: (4 sliding + 1 full attention) x 7, GQA 8/1, head 256/512, per-layer embeddings, double-wide MLP | 1.9 GiB | TBD | TBD | TBD |
+| [Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B-it) (it, W4A16, T=512) | same, 4-bit weights (groups of 128, FP16 scales) | 1.21 GiB | not yet on the board (area, see [docs](docs/gemma4_w4/README.md)) | - | - |
 
 Decode slows as the context grows, because attention reads every earlier key and value. Measured on
 the board (`sw/ctx_bench.py`), in M cycles per token (1 M = 10 ms):
@@ -34,8 +39,9 @@ the board (`sw/ctx_bench.py`), in M cycles per token (1 M = 10 ms):
 Qwen3.5's prefill is slower per token because its DeltaNet recurrence
 runs token by token; Qwen3's attention takes a chunk at once.
 Export a model with `tools/export_kv260.py --ckpt <checkpoint> --out deploy/kv260/data_<name>` (the
-checkpoint's `model_type` picks the lowering). On the board, the first argument of `run.sh` picks the
-model: `sudo ./run.sh [qwen3.5|qwen3.5-mtp|qwen3|gemma3] [chat|selftest|quick|profile|...]`
+checkpoint's `model_type` picks the lowering; `--wbits 4` selects W4A16). On the board, the first
+argument of `run.sh` picks the model:
+`sudo ./run.sh [qwen3.5|qwen3.5-mtp|qwen3|gemma3|gemma4|gemma4-w4] [chat|selftest|quick|profile|...]`
 (default: Qwen3.5-0.8B, chat).
 
 ## Gemma 3 1B
@@ -55,6 +61,37 @@ Gemma 3 1B needed no RTL change, only the lowering, the export and the board run
 
 W8A8 against the FP32 model (teacher-forced): top-1 agreement 84-89%, perplexity +3-5% (English
 17.69 to 18.53, Chinese 46.42 to 48.91). `sudo ./run.sh gemma3` starts a chat at about 10 tokens/s.
+
+## Gemma 4 E2B and W4A16
+
+Gemma 4 E2B ([details, in Chinese](docs/gemma4_w4/README.md)) is the largest model so far and drove
+two bitstream changes:
+
+- **v4.0: a 4 GB address space.** The page table grows from 512 to 2,048 entries (2 MB pages) and
+  moves into two BRAM copies; the VERSION register reads `0x00040000` and exports that need the new
+  firmware carry `min_firmware`. Gemma 4's W8A8 image (1.9 GiB, T=512) no longer fits 1 GB.
+- **W4A16 GEMV (`tm_w4`).** A dedicated path for 4-bit weights: 128 DSP multipliers per row, a
+  128-value group's dot product per cycle from one whole 128-byte wide beat (four rows per pass,
+  `RW=8` consumes four groups a beat), group dot products converted to FP32 and multiplied by the
+  weight scale (FP16, groups of 128 channels) and the activation scale; the aligned 16-bit
+  block-FP activations and everything after the multiply are shared with the W8 GEMV. The image
+  shrinks from 1.9 GiB to 1.21 GiB; activations keep 16-bit precision, so the accuracy loss is the
+  weights' (PC, top-1 vs FP32: W8A8 83.1%, W4A16 64.6% on a 66-token prompt; 76.5% / 44.7% on an
+  86-token prompt). Simulation: M=1, N=64, K=4096 takes 5,131 core cycles (64 bytes a cycle,
+  7x the first narrow-read version). The contract adds K % 256 == 0, K <= 8192 and
+  128-byte-aligned W offsets for W4 descriptors.
+  **The KV260 cannot hold both paths**: the W8A8 bitstream alone is 105,634 LUTs (90.2%) and the
+  W4 unit adds 13k, so the W4 image needs 120,193 LUTs (102.6%) and does not place. The bitstream
+  ships without it (VERSION 0x00040000 = 4 GB address space only); a W4 build reports 0x00040001
+  and the W4 export refuses to load on the current firmware instead of computing wrong numbers.
+  The area plan (elide the W8 GEMV, halve the multipliers, ring-buffer the X banks, or run W4 on
+  the GEMV datapath) is in [docs/gemma4_w4](docs/gemma4_w4/README.md).
+
+The lowering maps the rest of the architecture with existing operators: per-layer embeddings (PLE)
+precomputed into the image (`ple_bf16.bin`), KV sharing for the last 20 layers, V-norm without
+scale, layer scalars, and the softcapped (30.0) tied head split into blocks. Both exports
+(`gemma4` W8A8, `gemma4-w4` W4A16) share `embed_bf16.bin` and `ple_bf16.bin` via hard links on
+the board.
 
 ## Version history
 
@@ -77,9 +114,10 @@ story, with the problems met at each step, is in the [project log](docs/tars_kv2
 | v3.1 | | systolic array removed (simulation, merged into v3.2) | - | - |
 | v3.2 | 2026-11-03 | no array; 128 B read port over four HP ports; GEMV 128 B / cycle | 0.16 s (15.7 M) | 86.0% |
 | v3.2b | 2026-11-07 | FDOT passes overlap, Q kept on chip (VERSION register unchanged) | 1.05-1.10x faster; Qwen3-0.6B 1.40x at position 250 | 85.65% |
-| **v3.3** (current) | 2026-11-07 | FDOT at 16 products a cycle (4 lane banks, 128 B reads) | **0.13 s** (13.2 M); Qwen3-0.6B 0.07 s; Gemma 3 1B 0.09 s | 89.55% |
+| v3.3 | 2026-11-07 | FDOT at 16 products a cycle (4 lane banks, 128 B reads) | **0.13 s** (13.2 M); Qwen3-0.6B 0.07 s; Gemma 3 1B 0.09 s | 89.55% |
 | v3.3 + counters | 2026-11-08 | per-operator cycle counters (`PROFILE_CAP`), sampled logits identical (experimental) | first run 0.005-0.103% slower; one repeat 0.60% slower | 89.62% |
 | v3.4 | 2026-11-08 | optional packed FP16 DeltaNet state (experimental, not installed) | FP16 export 3% slower than FP32 on v3.4 | 90.50% |
+| **v4.0** (current) | 2026-11-14 | 4 GB address space (2,048-entry BRAM page table); the W4A16 GEMV unit (`tm_w4`, VERSION 0x00040001) is in the RTL but not in this bitstream (area) | W4: simulation only | TBD |
 
 Model and software milestones on these bitstreams:
 
@@ -89,6 +127,7 @@ Model and software milestones on these bitstreams:
 | 2026-11-06 | Qwen3.5-0.8B: optional MTP speculative decoding (bit-identical; 0.97x on average, so off by default) |
 | 2026-11-08 | Gemma 3 1B (gemma-3-1b-it): lowering, export, BOS and chat template in the runtime, no RTL change |
 | 2026-11-08 | `run.sh` takes the model as its first argument; operator profiler (`run.sh profile`) |
+| 2026-11-14 | Gemma 4 E2B (gemma-4-E2B-it): W8A8 on the 4 GB v4.0 bitstream, W4A16 export and `tm_w4` RTL |
 
 Experimental firmware and results are archived under `~/tars/firmware_v33_profile/`,
 `~/tars/firmware_v34/` and `~/tars/results/`; the linked reports use this consolidated layout.
@@ -145,7 +184,7 @@ To try it: `python tools/export_kv260.py --mtp --out deploy/kv260/data_mtp`, the
 | `deploy/kv260/` | board software (Kria Ubuntu 22.04): `run.sh` (model as its first argument), `setup.sh`, chat, selftest and profiler (README in Chinese) |
 | `tools/export_kv260.py` | builds the board's model image from the Hugging Face checkpoint (not in git: ~1.5 GB) |
 | `docs/tars_kv260_history.html` | the project log: ASIC start, FPGA port, every version, lessons (Chinese) |
-| `docs/gemma3_1b/`, `docs/fp16_state_v34/`, `docs/profiling_v33/` | reports with the board logs (Chinese) |
+| `docs/gemma3_1b/`, `docs/gemma4_w4/`, `docs/fp16_state_v34/`, `docs/profiling_v33/` | reports with the board logs (Chinese) |
 
 Quick start on the board: export the model data on a PC (`python tools/export_kv260.py --ckpt <Qwen3.5-0.8B>`),
 copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`. Other models' exports go

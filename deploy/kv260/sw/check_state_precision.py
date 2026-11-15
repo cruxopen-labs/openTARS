@@ -155,7 +155,8 @@ def main():
     tokenizer = Tokenizer.from_file(str(paths[0] / "tokenizer.json"))
     sequences = {name: tokenizer.encode(text, add_special_tokens=False).ids[:args.tokens]
                  for name, text in TEXTS.items()}
-    reports = compare_on_device(B.Fpga() if args.fpga else B.Golden(), paths, sequences)
+    mb = max(B.manifest_mem(paths[0]), B.manifest_mem(paths[1]))
+    reports = compare_on_device(B.Fpga(mem_bytes=mb) if args.fpga else B.Golden(mem=mb), paths, sequences)
     report = dict(schema=1, baseline="W8A8 / FP32 state", candidate="W8A8 / FP16 state / FP32 arithmetic",
                   note="Fixed prose, not a corpus quality guarantee; exports must use the same checkpoint.",
                   backend="FPGA" if args.fpga else "CPU golden model",

@@ -486,3 +486,83 @@ def test_swap_state_copies_exactly():
         o = low.p.base + v.off
         assert bytes(m.ddr[o:o + len(b)]) == b
 
+
+def test_gemma4_blocks_match_transformers():
+    """Gemma 4 E2B features (sliding + full layers with distinct head_dim and proportional / default
+    RoPE, V RMSNorm without scale, KV sharing across layers, double-wide GeGLU MLP split into K
+    blocks, per-layer embeddings PLE, layer_scalar, and ping-pong keep_layers=False): each layer's
+    update and final output within 3e-5 of transformers' Gemma4TextModel with W8A8 linears."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(dict(Q.CFG_G4_SMALL, intermediate_size=2304),
+                        ["sliding_attention", "full_attention", "sliding_attention", "full_attention"])
+    w = Q.random_weights(cfg)
+    chunks = [5, 1, 3, 7]
+    T = sum(chunks)
+    x = Q.random_inputs(cfg, T, seed=2)
+    ple = Q.random_ple_inputs(cfg, T)
+    low = L.QwenLowering(cfg, w, max_tokens=T, ddr_bytes=1 << 26, keep_layers=True)
+    assert [d.k for d in low.lw[2]["down"]] == [2304, 2304]
+    low.input(x, ple=ple)
+    t0 = 0
+    for c in chunks:
+        low.chunk(t0, c)
+        t0 += c
+    ddr, q, n = low.prog.build()
+    m = Machine(bytearray(ddr), gemv_only=True)
+    assert m.run_queue(q, n).done
+    rq = Q.run_reference(cfg, w, x, chunks, fake_quant=True, ple=ple)
+    t0 = 0
+    for i, c in enumerate(chunks):
+        prev, prev_r = x[t0:t0 + c], x[t0:t0 + c]
+        for lay in range(4):
+            g = low.read_layer(m, lay, t0, c)
+            dg, dr = g - prev, rq.layer_out[i][lay] - prev_r
+            assert np.abs(dg - dr).max() <= 3e-5 * np.abs(dr).max(), (i, lay)
+            prev, prev_r = g, rq.layer_out[i][lay]
+        fin = low.read_final(m, t0, c)
+        assert np.abs(fin - rq.final[i]).max() <= 3e-5 * np.abs(rq.final[i]).max()
+        t0 += c
+    # Also verify keep_layers=False (ping-pong residual stream) produces bit-identical final output
+    low_pp = L.QwenLowering(cfg, w, max_tokens=T, ddr_bytes=1 << 26, keep_layers=False)
+    assert low_pp.end < low.end
+    low_pp.input(x, ple=ple)
+    t0 = 0
+    for c in chunks:
+        low_pp.chunk(t0, c)
+        t0 += c
+    ddr2, q2, n2 = low_pp.prog.build()
+    m2 = Machine(bytearray(ddr2), gemv_only=True)
+    assert m2.run_queue(q2, n2).done
+    assert low_pp.read_final(m2, 0, T).tobytes() == low.read_final(m, 0, T).tobytes()
+
+
+@pytest.mark.parametrize("chunks", [[4, 1, 1, 1], [6, 1, 1]])
+def test_gemma4_model_with_head_greedy_matches_transformers(chunks):
+    """Gemma 4 greedy decoding with PLE embeddings, KV sharing, double-wide MLP, and NPU softcapped
+    tied head (30 * tanh(x / 30)): logits within 2e-5 of transformers' Gemma4TextModel and identical
+    greedy tokens."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from tars_mini import llm as L
+    from tars_mini import qwen_ref as Q
+    cfg = Q.make_config(Q.CFG_G4_SMALL,
+                        ["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
+                        vocab=4096)
+    w = Q.random_weights(cfg, embed=True)
+    low = L.QwenLowering(cfg, w, max_tokens=16, ddr_bytes=1 << 26, head=True, queue_cap=4096, keep_layers=False)
+
+    def run(ddr, q, n):
+        m = Machine(ddr, gemv_only=True)
+        assert m.run_queue(q, n).done
+        return m.ddr
+    prompt = [5, 77, 901, 12, 3000, 2][:chunks[0]]
+    ids, logits, _ = low.generate(run, prompt, len(chunks) - 1)
+    x = low.embed(ids[:-1])
+    ple = low.embed_ple(ids[:-1])
+    ref = Q.run_reference(cfg, w, x, [len(prompt)] + [1] * (len(chunks) - 1), fake_quant=True, head=True, ple=ple)
+    for i, (g, r) in enumerate(zip(logits, ref.logits)):
+        assert np.abs(g - r).max() <= 2e-5 * np.abs(r).max(), i
+        assert int(np.argmax(r)) == ids[len(prompt) + i]

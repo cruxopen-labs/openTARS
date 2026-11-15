@@ -89,7 +89,9 @@ QM_NONE, QM_TENSOR, QM_CHANNEL, QM_ROWCOL = 0, 1, 2, 3
 # v0.4 QM_ROWCOL (V1.3.1's code 3, "group", unused so far): per-channel weight scales at
 # SCALE_OFF and per-row (per-token) activation scales at BASE_ADDR + 16 * HDR_RSV
 QM_GROUP = QM_ROWCOL
-DT_BF16, DT_INT8, DT_INT4, DT_FP8 = 0, 1, 2, 3
+DT_BF16, DT_INT8, DT_INT4, DT_FP8, DT_FP32 = 0, 1, 2, 3, 4
+W4_GROUP = 128
+W4A16_MIN_VERSION = 0x00040001
 
 # EPI (399:384). The activation code is EPI[1:0] | EPI[5] << 2 (v0.3: EPI[5] was a must-be-0
 # reserved bit, so every v0.2 descriptor keeps its meaning)

@@ -43,6 +43,30 @@ module tm_bram #(
   end
 endmodule
 
+// The same memory with a byte write strobe: several narrow writers share one word (the W4 unit's
+// X banks: four 128-byte-lane banks to a 512-bit word keep the instance from wasting a whole
+// RAMB18 per 128 bits; Vivado infers the byte enables).
+module tm_bramm #(
+  parameter int W = 512,
+  parameter int D = 64
+) (
+  input  logic                 clk,
+  input  logic                 we,
+  input  logic [W/8-1:0]       ws,
+  input  logic [$clog2(D)-1:0] wa,
+  input  logic [W-1:0]         wd,
+  input  logic [$clog2(D)-1:0] ra,
+  output logic [W-1:0]         rd
+);
+  (* ram_style = "block" *) logic [W-1:0] m [D];
+  always_ff @(posedge clk) begin
+    if (we)
+      for (int b = 0; b < W / 8; b++)
+        if (ws[b]) m[wa][8 * b +: 8] <= wd[8 * b +: 8];
+    rd <= m[ra];
+  end
+endmodule
+
 // A FIFO across two clocks (gray-coded pointers, two-flop synchronizers; BRAM 1: block RAM,
 // else distributed RAM). Write side: we only when !full. Read side, first word fall-through
 // through an output register: rv says rd is valid, rr takes it. Each side has its own

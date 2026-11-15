@@ -127,8 +127,20 @@ module tm_kv260_wrap (
   assign r1_axi_arid = {5'b0, r1_arid};
   assign r2_axi_arid = {5'b0, r2_arid};
   assign r3_axi_arid = {5'b0, r3_arid};
-  tm_kv260_top #(.R(8), .C(2), .VG(1), .NB(4), .OT(32), .HB(256), .OQ(32), .LG(4), .VQMIN(128), .GB(4),
-                 .MEM_BYTES(64'h4000_0000), .PAGE_BITS(21), .NPT(512), .PA_BITS(40)) u_top (
+  // TM_W4B: the W4A16 bitstream (carries tm_w4, no W8 GEMV fit: see docs/gemma4_w4); the default
+  // build is the W8A8 bitstream and rejects W4 descriptors
+`ifdef TM_W4B
+  localparam W4X = 1'b1;
+  // No W8 GEMV work runs on the W4 bitstream (every GEMM is W4A16): one GEMV row instead of four
+  // frees the multiplier arrays' logic for the W4 unit's.
+  localparam GB = 1;
+`else
+  localparam W4X = 1'b0;
+  localparam GB = 4;
+`endif
+  tm_kv260_top #(.R(8), .C(2), .VG(1), .NB(4), .OT(32), .HB(256), .OQ(32), .LG(4), .VQMIN(128), .GB(GB),
+                 .W4X(W4X),
+                 .MEM_BYTES(64'h1_0000_0000), .PAGE_BITS(21), .NPT(2048), .PA_BITS(40)) u_top (
     .clk(clk), .rstn(rstn), .hclk(hclk), .hrstn(hrstn), .s_axil_awaddr(s_axil_awaddr),
     .s_axil_awvalid(s_axil_awvalid), .s_axil_awready(s_axil_awready), .s_axil_wdata(s_axil_wdata),
     .s_axil_wstrb(s_axil_wstrb), .s_axil_wvalid(s_axil_wvalid), .s_axil_wready(s_axil_wready),

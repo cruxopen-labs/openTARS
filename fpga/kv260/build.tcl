@@ -12,9 +12,12 @@
 set root [file normalize [file join [file dirname [info script]] .. ..]]
 set out  [file join $root build kv260]
 set jobs [expr {[llength $argv] > 0 ? [lindex $argv 0] : 6}]
+set w4   [expr {[llength $argv] > 1 && [lindex $argv 1] eq "w4"}]
+set synth_only [expr {[llength $argv] > 2 && [lindex $argv 2] eq "synth"}]
+set name [expr {$w4 ? "tars_kv260_w4" : "tars_kv260"}]
 file mkdir $out
 
-create_project -force tars_kv260 [file join $out prj] -part xck26-sfvc784-2LV-c
+create_project -force $name [file join $out prj_$name] -part xck26-sfvc784-2LV-c
 set_property board_part xilinx.com:kv260_som:part0:1.4 [current_project]
 
 set rtl [file join $root rtl]
@@ -22,7 +25,9 @@ add_files [list \
   $rtl/tm_fp_pkg.sv $rtl/tm_fpp_pkg.sv $rtl/tm_fpu.sv $rtl/tm_sfu.sv $rtl/tm_mem.sv $rtl/tm_vpu.sv \
   $rtl/tm_xpu.sv $rtl/tm_vdly.sv $rtl/tm_pe.sv $rtl/tm_array.sv $rtl/tm_core.sv $rtl/tm_kv260.sv \
   $rtl/tm_kv260_wrap.v]
-set_property verilog_define {TM_FPGA} [get_filesets sources_1]
+set defs {TM_FPGA}
+if {$w4} { lappend defs TM_W4B }        ;# the W4A16 bitstream (carries tm_w4)
+set_property verilog_define $defs [get_filesets sources_1]
 update_compile_order -fileset sources_1
 
 create_bd_design tars
@@ -87,7 +92,7 @@ save_bd_design
 set bd [get_files tars.bd]
 generate_target all $bd
 make_wrapper -files $bd -top
-add_files -norecurse [file join $out prj tars_kv260.gen sources_1 bd tars hdl tars_wrapper.v]
+add_files -norecurse [file join $out prj_$name $name.gen sources_1 bd tars hdl tars_wrapper.v]
 set_property top tars_wrapper [current_fileset]
 update_compile_order -fileset sources_1
 # the read ports' clock-crossing FIFOs (tm_afifo): a gray pointer reaches its first synchronizer
@@ -106,20 +111,35 @@ set_property strategy Performance_ExplorePostRoutePhysOpt [get_runs impl_1]
 foreach r [get_runs -filter {IS_SYNTHESIS}] {
   set_property STEPS.SYNTH_DESIGN.ARGS.DIRECTIVE AreaOptimized_high $r
 }
+# the core is a module reference: its out-of-context synthesis run must finish before the
+# top-level run reads the netlist (otherwise the top synthesizes the black-box stub and
+# opt_design fails with [DRC INBB-3])
+set ipruns [get_runs -quiet -filter {NAME =~ *tars_0_synth_1}]
+if {[llength $ipruns]} {
+  launch_runs $ipruns -jobs $jobs
+  wait_on_run $ipruns
+  if {[get_property PROGRESS [lindex $ipruns 0]] != "100%"} { error "core synthesis failed" }
+}
 launch_runs synth_1 -jobs $jobs
 wait_on_run synth_1
 if {[get_property PROGRESS [get_runs synth_1]] != "100%"} { error "synthesis failed" }
+if {$synth_only} {
+  open_run synth_1
+  report_utilization -file [file join $out $name.utilization_synth.rpt]
+  puts "SYNTH DONE"
+  return
+}
 launch_runs impl_1 -to_step write_bitstream -jobs $jobs
 wait_on_run impl_1
 if {[get_property PROGRESS [get_runs impl_1]] != "100%"} { error "implementation failed" }
 
 open_run impl_1
-report_utilization -file [file join $out utilization.rpt]
-report_utilization -hierarchical -hierarchical_depth 4 -file [file join $out utilization_hier.rpt]
-report_timing_summary -max_paths 20 -file [file join $out timing.rpt]
+report_utilization -file [file join $out $name.utilization.rpt]
+report_utilization -hierarchical -hierarchical_depth 4 -file [file join $out $name.utilization_hier.rpt]
+report_timing_summary -max_paths 20 -file [file join $out $name.timing.rpt]
 set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
 set whs [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -hold]]
 puts "TIMING WNS=$wns WHS=$whs"
-file copy -force [glob [file join $out prj tars_kv260.runs impl_1 *.bit]] [file join $out tars_kv260.bit]
-write_hw_platform -fixed -include_bit -force [file join $out tars_kv260.xsa]
+file copy -force [glob [file join $out prj_$name $name.runs impl_1 *.bit]] [file join $out $name.bit]
+write_hw_platform -fixed -include_bit -force [file join $out $name.xsa]
 puts "DONE"

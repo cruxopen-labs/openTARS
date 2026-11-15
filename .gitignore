@@ -11,3 +11,9 @@ deploy/kv260/wheels/
 *.orig
 *:Zone.Identifier
 deploy/kv260/data_*/
+vivado.jou
+vivado.log
+
+# Vivado batch backups (concurrent runs)
+vivado_*.backup.jou
+vivado_*.backup.log

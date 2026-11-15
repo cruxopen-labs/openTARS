@@ -129,7 +129,8 @@ def main() -> int:
     ap.add_argument("--per-token", action="store_true", help="every position a token at a time (no prefill chunks)")
     args = ap.parse_args()
     d = Path(args.data)
-    dev = B.Golden() if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga()   # golden: a PC check
+    mb = B.MEM if args.hw_only else B.manifest_mem(d)
+    dev = B.Golden(mem=mb) if os.environ.get("TARS_BACKEND") == "golden" else B.Fpga(mem_bytes=mb)   # golden: a PC check
     print(f"TARS-mini: {dev.params}")
     print("1. hardware path (random programs vs the golden model)")
     ok1 = hw_cases(dev, d)

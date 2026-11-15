@@ -102,8 +102,6 @@ def build(top: str, sources: list[Path], params: dict | None = None, extra: list
              + _version().encode())
     out = BUILD / f"{top}_{h.hexdigest()[:12]}"
     exe = out / f"V{top}"
-    if exe.exists():
-        return exe
     out.mkdir(parents=True, exist_ok=True)
     with open(out / ".lock", "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)

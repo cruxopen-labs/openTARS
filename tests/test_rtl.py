@@ -645,6 +645,9 @@ def test_structural_fp_units_in_the_core():
     p.rowop(y, "layernorm", gamma=rng.uniform(.5, 1.5, 32), beta=rng.normal(0, 1, 32))
     p.rowop(y, "rmsnorm", gamma=rng.uniform(.5, 1.5, 32))
     ddr, q, n = p.build()
-    st, rb = both(bytes(ddr), q, n, 4, 4, params=dict(HB=64))
-    rs = rtlsim.run_core(bytes(ddr), q, n, R=4, C=4, params=dict(HB=64), structural=True)
+    # A fixed read latency: with the testbench's random jitter (lat=2) the total cycle count can
+    # differ by a couple of cycles between the two builds (the jitter stream follows the request
+    # pattern), which says nothing about the units' cycle behaviour.
+    st, rb = both(bytes(ddr), q, n, 4, 4, params=dict(HB=64), lat=1)
+    rs = rtlsim.run_core(bytes(ddr), q, n, R=4, C=4, params=dict(HB=64), structural=True, lat=1)
     assert st.done and rs.ddr == rb.ddr and rs.cycles == rb.cycles, (rs.cycles, rb.cycles)

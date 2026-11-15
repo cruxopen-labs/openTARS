@@ -11,9 +11,14 @@ module tb_core #(
   parameter int VG = 4,
   parameter int OQ = 128,
   parameter int VQMIN = 32,
+  parameter int RW = 1,                 // W read width: 16 RW bytes a wide beat (1: never wide)
+  parameter int ARR = 1,                // 0: no systolic array (the KV260 build's profile)
+  parameter int W4XD = 512,             // W4A16 X bank depth: groups (K / 128)
+  parameter int W4MB = 4,               // W4A16: the rows of A a pass holds
   parameter longint MEM_BYTES = 64'h40_0000
 );
   localparam int WORDS = int'(MEM_BYTES / 16);
+  localparam int RWH = (RW > 1) ? RW - 1 : 1;
 
   logic clk = 1'b0, rst = 1'b1, start = 1'b0;
   always #5 clk = ~clk;
@@ -30,10 +35,11 @@ module tb_core #(
   logic [63:0]  mr_addr, mw_addr;
   logic [127:0] mr_rdata, mw_data;
   logic         mr_wide;                  // (RW 1: never)
-  logic [127:0] mr_rhi = '0;
+  logic [128*RWH-1:0] mr_rhi;
   logic [15:0]  mw_strb;
 
-  tm_core #(.R(R), .C(C), .MEM_BYTES(MEM_BYTES), .NB(NB), .OT(OT), .HB(HB), .VG(VG), .LG(LG), .OQ(OQ), .VQMIN(VQMIN)) dut (.*);
+  tm_core #(.R(R), .C(C), .MEM_BYTES(MEM_BYTES), .NB(NB), .OT(OT), .HB(HB), .VG(VG), .LG(LG), .OQ(OQ),
+            .VQMIN(VQMIN), .RW(RW), .ARR(ARR), .W4XD(W4XD), .W4MB(W4MB)) dut (.*);
 
   int unsigned stall = 0, lat = 2, seed = 1;
   longint unsigned maxcyc = 64'd50_000_000;
@@ -65,6 +71,7 @@ module tb_core #(
       if (dram_pop() != 0) begin
         mr_rvalid <= 1'b1;
         mr_rdata  <= mem[d_ad[0][63:4]];
+        for (int k = 0; k < RWH; k++) mr_rhi[128 * k +: 128] <= mem[d_ad[0][63:4] + 1 + k];
         void'(d_ad.pop_front());
       end
       if (mr_req && mr_ready) begin
@@ -89,6 +96,8 @@ module tb_core #(
     if (q_due.size() != 0 && q_due[0] <= now) begin
       mr_rvalid <= 1'b1;
       mr_rdata  <= mem[q_ad[0][63:4]];
+      // a wide beat's upper words (narrow returns' consumers ignore mr_rhi)
+      for (int k = 0; k < RWH; k++) mr_rhi[128 * k +: 128] <= mem[q_ad[0][63:4] + 1 + k];
       void'(q_due.pop_front());
       void'(q_ad.pop_front());
     end
