@@ -81,7 +81,8 @@ two bitstream changes:
   7x the first narrow-read version). The contract adds K % 256 == 0, K <= 8192 and
   128-byte-aligned W offsets for W4 descriptors.
   **The KV260 cannot hold both paths** (measured, not estimated): the default W8A8 image is
-  107,852 LUTs after `opt_design` (the fold left it unchanged) and 105,847 routed (WNS +0.029);
+  107,852 LUTs after `opt_design` (the fold left it unchanged) and 105,813 routed (WNS +0.047,
+  rebuilt and re-bitstreamed after the fold);
   the W4 image is now 114,412 (97.7%) and still does not place (the last one that placed is ~108k;
   the first W4 image at 122,798 needed 10,302 CLBs against 8,461 available). Two steps got it
   from 122,798 down: moving its activation buffer (RAW) and scale-beat store (wsb) from register
