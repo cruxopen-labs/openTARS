@@ -78,9 +78,26 @@ from 115 MB to 2.2 GB while the MACs grow from 1.4 G to 81 G. The design is a pe
 score matrix on a core with no flash-attention path, so the score traffic is the part to attack
 first if a real image ever has to be fast.
 
+## The KV260 profile (no array): same tokens, the weights re-streamed
+
+The board image is GEMV-only (`ARR=0`): a GEMM with any `M` and `K <= 4096` runs on the extension
+unit, which holds `GB = 4` rows of A per pass and streams W again for the next pass. The tower's `K`s
+are all `<= 3072` and the patch embed is emitted as a GEMM rather than a Conv, so **every descriptor
+of the program is legal on that image** and the core splits `M` (the patch count) into `ceil(P/4)`
+passes by itself — the descriptor count stays 944. Measured: the 0.8B program at 64x64 and at 224x224
+runs to completion under the GEMV-only profile with tokens bit-identical to the full-array profile,
+and the small tower at 16 patches (`M = 16`, four passes a GEMM) runs on the verilated KV260 top
+(`tb_kv260`, AXI memory, scrambled pages) giving back the golden model's DDR byte for byte.
+
+So the difference is throughput, not function — and it is all in the weight stream, because W is read
+once per pass: 99 MB of weights become 357 MB at 64x64 (x3.6; the merger's `M = 4` is one pass),
+4.4 GB at 224x224 (x44) and 17.5 GB at 448x448 (x177), against the full-array program's 115 MB /
+372 MB / 2.23 GB of total traffic. That is why an image on the board wants the array, or a GEMV pass
+deeper than four rows, before it wants anything else.
+
 ## Verification
 
-`python -m pytest tests/test_qwen_vit.py -q` (6 tests, ~25 s with the core already built, the 0.8B one
+`python -m pytest tests/test_qwen_vit.py -q` (7 tests, ~25 s with the core already built, the 0.8B one
 needs the checkpoint):
 
 - `patchify` against a loop restatement of the processor's order (and the processor itself when
@@ -111,5 +128,5 @@ above, and the real 0.8B tower at 32x32 — 944 descriptors, 4 patches, 1 visual
 descriptor count is the tower's, not the image's (944 at 32x32 and at 224x224), so the cycles scale
 with the patches through the `N`/`K` fields alone.
 
-The KV260 top is GEMV-only (`ARR=0`), so the vision tower runs on the full-array core; putting images
-on the board would need either the array enabled or the attention expressed as GEMV passes.
+The KV260 top is GEMV-only (`ARR=0`) and runs the same program unchanged — bit-identical to the
+golden model, at the cost of re-streaming the weights once per four patch rows (the section above).

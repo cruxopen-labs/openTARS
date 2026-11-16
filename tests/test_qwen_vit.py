@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from tars_mini import qwen_vit as V
+from tars_mini import contract as C
 from tars_mini import rtlsim
 from tars_mini.golden import Machine
 
@@ -151,6 +152,26 @@ def test_one_program_serves_a_smaller_image(small):
     np.testing.assert_array_equal(V.VisionLowering(cfg, w, patches_max=16).run(px, pos, rope), got)
     ref = V.run_reference(cfg, w, px, grid, fake_quant=True)["merged"]
     np.testing.assert_allclose(got, ref, rtol=1e-4, atol=1e-5 * max(float(np.abs(ref).max()), 1.0))
+
+
+def test_the_gemv_only_profile_gives_the_same_tokens(small):
+    """The board image has no array: a GEMM keeps any M and K <= 4096 and the core runs it in passes
+    of GB = 4 rows. Same descriptors, same tokens — the cost is the weight stream, not the result."""
+    cfg, w = small
+    px, grid = V.patchify(_image(16), cfg)                  # 16 patches: M = 16, four passes a GEMM
+    pos, rope = V.position_embeddings(cfg, w, grid), V.rope_table(cfg, grid)
+    low = V.VisionLowering(cfg, w, patches_max=len(px), ddr_bytes=1 << 23)
+    got = low.run(px, pos, rope)                            # the full-array profile
+    ddr, q, cnt = low.p.build()
+    assert 16 in [C.decode(raw)["M"] for raw in low.p.descs if C.decode(raw)["OPCODE"] == C.OP_GEMM]
+    a = bytearray(ddr)
+    st = Machine(a, gemv_only=True).run_queue(q, cnt)
+    assert st.done and st.err_code == 0, (st.err_code, st.op_idx)
+    out = low.out.rowv(0, len(px) // 4)
+    base = low.p.base + out.off
+    prof = np.stack([np.frombuffer(bytes(a[base + r * out.ld: base + r * out.ld + 4 * out.cols]), "<f4")
+                     for r in range(out.rows)])
+    np.testing.assert_array_equal(prof, got)
 
 
 @pytest.mark.skipif(not rtlsim.have_verilator(), reason="needs Verilator")

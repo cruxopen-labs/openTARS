@@ -132,8 +132,11 @@ against the tower's own `cos`/`sin`, a small tower block by block against the W8
 real 0.8B tower at 64x64 — where the merged tokens land at the emulation's own measured noise floor
 (12 quantized blocks turn a 1e-7 input change into ~3%). The same program runs on the verilated v0.4
 core and gives back the golden model's DDR byte for byte: the small tower on every run, and the real
-0.8B tower at 32x32 (944 descriptors, 1 visual token, 7.53 M cycles — 37.6 ms at 200 MHz). Images stay
-a core-level path for now, because the KV260 top is GEMV-only (`ARR=0`).
+0.8B tower at 32x32 (944 descriptors, 1 visual token, 7.53 M cycles — 37.6 ms at 200 MHz). The board
+image (GEMV-only, `ARR=0`) runs the very same program with bit-identical tokens — every `K` is at most
+3072, the patch embed is a GEMM rather than a Conv, and the core splits the patch rows into passes of
+four itself; only the weight stream grows (99 MB of weights become 357 MB at 64x64 and 4.4 GB at
+224x224, [details](docs/qwen_vit/README.md#the-kv260-profile-no-array-same-tokens-the-weights-re-streamed)).
 
 ## Version history
 
