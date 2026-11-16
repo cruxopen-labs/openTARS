@@ -102,6 +102,39 @@ scale, layer scalars, and the softcapped (30.0) tied head split into blocks. Bot
 (`gemma4` W8A8, `gemma4-w4` W4A16) share `embed_bf16.bin` and `ple_bf16.bin` via hard links on
 the board.
 
+## Qwen3.5-0.8B's vision tower (reference model and lowering)
+
+Qwen3.5-0.8B's checkpoint also carries a ViT (`model.visual`: 12 blocks of 768, 12 heads of 64,
+patch 16 with temporal 2, a 2x2 spatial merge, a learned 48x48 position table, axial 2-D RoPE, and a
+merger that folds each 2x2 block into one 1024-wide token). It is now in the reference model and
+lowered to the v0.4 ops — **no RTL change**: GEMM-RC, FDOT (NT and NN), ROW_LAYERNORM, ROW_SOFTMAX,
+ROW_QUANT, ELT and ROPE cover it ([details](docs/qwen_vit/README.md)).
+
+`tars_mini/qwen_vit.py` holds the transformers reference (`run_reference`, fp32 or W8A8-emulated) and
+the lowering (`VisionLowering`), plus the host side the text model also keeps off the core:
+`patchify` (the processor's order), `position_embeddings` (the learned table resampled bilinearly)
+and `rope_table` (one row per patch, `cos` then `sin` of the axial angles). One image is one program:
+patch embed, the blocks and the merger, then `[P/4, 1024]` tokens for the LLM.
+
+Measured on the golden model, per image (12 blocks, attention emitted per head, so the descriptor
+count is fixed and only the shapes change):
+
+| Image | Patches | Visual tokens | Program DDR | Descriptors | MACs | DDR read | DDR written |
+|---|---|---|---|---|---|---|---|
+| 64x64 | 16 | 4 | 102 MB | 944 | 1.43 G | 115 MB | 14 MB |
+| 224x224 | 196 | 49 | 118 MB | 944 | 18.3 G | 372 MB | 254 MB |
+| 448x448 | 784 | 196 | 171 MB | 944 | 81.3 G | 2.23 GB | 2.06 GB |
+
+Both the MACs and the traffic grow with the image (1.4 G / 115 MB at 64x64, 81 G / 2.2 GB read at
+448x448); the scores are materialized `patches x padded_patches` per head, so a full-size image is a
+memory-bound program on a core without a flash-attention path. `python -m pytest tests/test_qwen_vit.py -q` checks the patch order, the rotary table
+against the tower's own `cos`/`sin`, a small tower block by block against the W8A8 reference, and the
+real 0.8B tower at 64x64 — where the merged tokens land at the emulation's own measured noise floor
+(12 quantized blocks turn a 1e-7 input change into ~3%). The same program runs on the verilated v0.4
+core and gives back the golden model's DDR byte for byte: the small tower on every run, and the real
+0.8B tower at 32x32 (944 descriptors, 1 visual token, 7.53 M cycles — 37.6 ms at 200 MHz). Images stay
+a core-level path for now, because the KV260 top is GEMV-only (`ARR=0`).
+
 ## Version history
 
 Hardware iterations, including simulation-only attempts marked below. Board measurements use a

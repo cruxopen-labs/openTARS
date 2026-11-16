@@ -424,15 +424,20 @@ def _w4_matmul(x: np.ndarray, qw) -> np.ndarray:
 
 
 def _fake_quant_linear(mod, wbits: int = 8) -> None:
+    """A Linear as the descriptor's arithmetic: per-token INT8 activations, per-channel INT8
+    weights, exact integer products, the two scales, and the module's bias when it has one."""
     torch = _torch()
+    bias = None if mod.bias is None else torch.from_numpy(mod.bias.detach().numpy().astype(np.float32))
     if wbits == 4:
         from .compiler import quantize_weight4
         qw = quantize_weight4(mod.weight.detach().numpy().astype(np.float64))
 
         def fwd(x):
             shp = x.shape
-            y = _w4_matmul(x.reshape(-1, shp[-1]).numpy(), qw)
-            return torch.from_numpy(y).reshape(*shp[:-1], -1)
+            y = torch.from_numpy(_w4_matmul(x.reshape(-1, shp[-1]).numpy(), qw)).to(torch.float32)
+            if bias is not None:
+                y = y + bias
+            return y.reshape(*shp[:-1], -1)
     else:
         qw = quant_weight(mod.weight.detach().numpy().astype(np.float64))
         wq = torch.from_numpy(qw.q)                              # int8: widened per call
@@ -443,5 +448,7 @@ def _fake_quant_linear(mod, wbits: int = 8) -> None:
             q, s = quant_tokens(x.reshape(-1, shp[-1]).numpy())
             acc = torch.from_numpy(q.astype(np.float64)) @ wq.double().T  # exact integers
             y = acc * torch.from_numpy(s.astype(np.float64))[:, None] * sc[None, :]
+            if bias is not None:
+                y = y.to(torch.float32) + bias
             return y.to(torch.float32).reshape(*shp[:-1], -1)
     mod.forward = fwd

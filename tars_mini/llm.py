@@ -79,22 +79,27 @@ class Dev(Program):
 
     # -- row ops
     def rowop(self, x: V, fn: int, y: V, gamma: V | None = None, eps: float = 0.0, start: int = 0,
-              scale_out: int = 0) -> None:
+              scale_out: int = 0, beta: V | None = None) -> None:
+        """A row op; a norm's beta (a LayerNorm's bias, v0.3's EPI.bias) at BIAS_OFF."""
         assert x.cols == y.cols and x.rows == y.rows
         assert x.fmt == C.OUT_FP32 and y.fmt != C.OUT_FP16
-        self._emit(OPCODE=C.OP_ROW, CTRL=fn, EPI=C.epi(C.ACT_NONE, y.fmt),
+        assert beta is None or (gamma is not None and beta.cols == x.cols)
+        self._emit(OPCODE=C.OP_ROW, CTRL=fn, EPI=C.epi(C.ACT_NONE, y.fmt, int(beta is not None)),
                    A_OFF=x.off, Y_OFF=y.off, M=x.rows, N=x.cols, K=start,
                    SCALE_OFF=gamma.off if gamma is not None else scale_out,
+                   BIAS_OFF=beta.off if beta is not None else 0,
                    W_OFF=C.f32_bits(eps) if gamma is not None else 0,
                    LDA16=_ld16(x.ld, 4 * x.cols), LDY16=_ld16(y.ld, y.cols * C.ESIZE[y.fmt]))
 
     def norm(self, x: V, gamma: V, eps: float, y: V, l2: bool = False) -> None:
         self.rowop(x, C.ROW_L2NORM if l2 else C.ROW_RMSNORM, y, gamma, eps)
 
-    def quant(self, x: V) -> tuple[V, int]:
-        """Per-token INT8 rows and their row scales (fp32, 16-byte aligned)."""
-        q = self.mat(x.rows, x.cols, C.OUT_INT8)
-        s = self.alloc(4 * x.rows)
+    def quant(self, x: V, q: V | None = None, s: int | None = None) -> tuple[V, int]:
+        """Per-token INT8 rows and their row scales (fp32, 16-byte aligned). Into `q` and `s`
+        when they are given: a long program that quantizes an activation before every GEMM can
+        reuse one pair instead of allocating one per layer."""
+        q = self.mat(x.rows, x.cols, C.OUT_INT8) if q is None else q
+        s = self.alloc(4 * x.rows) if s is None else s
         self.rowop(x, C.ROW_QUANT, q, scale_out=s)
         return q, s
 
