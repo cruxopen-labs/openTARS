@@ -88,8 +88,9 @@ two bitstream changes:
   arrays into LUTRAMs (117,363; `tm_w4` 10,664 in place, 8,017 standalone), then folding the unit
   into `tm_xpu` as a mode of it (`op` 6/7) so it no longer owns its own read port, beat queue,
   launch counter or output queue (114,412, -2,951). A W4-only image still needs ~6.4k less. Its
-  128 multipliers already sit in DSPs, so reusing the GEMV array saves only ~0.4k LUTs. The
-  bitstream ships without it (VERSION 0x00040000 = 4 GB address space only); a W4 build reports
+  128 multipliers already sit in DSPs, so reusing the GEMV array saves only ~0.4k LUTs, and
+  serializing the activation aligner to one value a cycle was measured at only 445 LUTs for 60%
+  more cycles, so it is not in. The bitstream ships without it (VERSION 0x00040000 = 4 GB address space only); a W4 build reports
   0x00040001 and the W4 export refuses to load on the current firmware instead of computing wrong
   numbers. The measured levers are in [docs/gemma4_w4](docs/gemma4_w4/README.md).
 
