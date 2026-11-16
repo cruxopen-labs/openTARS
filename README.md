@@ -229,17 +229,21 @@ To try it: `python tools/export_kv260.py --mtp --out deploy/kv260/data_mtp`, the
 
 | Path | What |
 |---|---|
-| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler and the Qwen3.5 / Qwen3 / Gemma 3 lowering (`llm.py`) |
+| `tars_mini/` | the contract (`contract.py`), its executable golden model (`golden.py`), compiler, the Qwen3.5 / Qwen3 / Gemma 3 lowering (`llm.py`) and Qwen3.5-0.8B's vision tower as a reference model plus lowering to the same ops (`qwen_vit.py`) |
 | `rtl/` | the core (SystemVerilog; FPGA changes under `` `ifdef TM_FPGA ``) and the KV260 top (`tm_kv260.sv`: AXI-Lite, 4-port 128 B read bridge, page table) |
 | `tests/`, `sim/` | RTL vs golden regressions (Verilator), random queue fuzz, board-like memory model |
 | `fpga/kv260/` | Vivado block design and build (`build.tcl`), device-tree overlay, packaging |
-| `deploy/kv260/` | board software (Kria Ubuntu 22.04): `run.sh` (model as its first argument), `setup.sh`, chat, selftest and profiler (README in Chinese) |
+| `deploy/kv260/` | board software (Kria Ubuntu 22.04): `run.sh` (model as its first argument), `setup.sh`, chat, selftest, profiler, and the vision path `sw/vit_tower.py` (image in, visual tokens out) / `sw/vit_chat.py` (`run.sh vit`) (README in Chinese) |
 | `tools/export_kv260.py` | builds the board's model image from the Hugging Face checkpoint (not in git: ~1.5 GB) |
+| `tools/prep_vision_kv260.py` | builds the board's vision program for one image (118 MiB: weights, buffers, the image's patches and tables) and the golden tokens to compare against |
 | `docs/tars_kv260_history.html` | the project log: ASIC start, FPGA port, every version, lessons (Chinese) |
 | `docs/gemma3_1b/`, `docs/gemma4_w4/`, `docs/fp16_state_v34/`, `docs/profiling_v33/` | reports with the board logs (Chinese) |
+| `docs/qwen_vit/` | the vision tower: interface, lowering, cost, the KV260 profile, the measurements on the board |
 
 Quick start on the board: export the model data on a PC (`python tools/export_kv260.py --ckpt <Qwen3.5-0.8B>`),
-copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`. Other models' exports go
+copy `deploy/kv260/` to the KV260, then `sudo ./setup.sh && sudo ./run.sh`. For an image, also export the
+vision program (`python tools/prep_vision_kv260.py --ckpt <...> --image <...> --out build/data_vit`), copy
+`build/data_vit` next to `data/`, and run `sudo ./run.sh vit --question "..."`. Other models' exports go
 next to `data/` (`data_qwen3/`, `data_gemma3/`, ...) and are chosen with `sudo ./run.sh <model>`.
 
 License: [Apache-2.0](LICENSE).

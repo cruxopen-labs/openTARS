@@ -9,6 +9,8 @@ deploy/kv260/data_v*/
 deploy/kv260/wheels/
 *.bak
 *.orig
+# the sample image the vision runs use (kept out of the repository)
+catsvsdogs.jpg
 *:Zone.Identifier
 deploy/kv260/data_*/
 vivado.jou

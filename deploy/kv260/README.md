@@ -4,7 +4,8 @@
 通过 S_AXI_HP0_FPD 访问 PS 侧 DDR。支持的模型：Qwen3.5-0.8B、Qwen3-0.6B、Gemma 3 1B（W8A8），
 以及 Gemma 4 E2B（W8A8；W4A16 的软件栈已就绪，但 W4 比特流受 KV260 面积限制尚未发布，
 见 `docs/gemma4_w4/README.md`）。Qwen3.5-0.8B（真实权重，W8A8）全部 24 层、final norm 和
-248320 词表的 head 都在 TARS-mini 上执行；A53 只做分词、embedding 查表和 argmax。
+248320 词表的 head 都在 TARS-mini 上执行；A53 只做分词、embedding 查表和 argmax。它的**视觉塔（ViT）
+也已上板**：图像 → 视觉 token → 文本模型一条命令跑完，见下面的「图像输入」。
 
 ## 验证状态（PC 上完成）
 
@@ -44,9 +45,12 @@
 | `sw/libtmdrv.so` (+ `tmdrv.c`) | 用户态驱动：/dev/mem 寄存器、hugepage 缓冲区与物理页号、cache 维护 |
 | `sw/tars_board.py` | 设备驱动 + Qwen 运行时 |
 | `sw/qwen_chat.py` | 串口对话 demo |
+| `sw/vit_tower.py` | 视觉塔：一张图的 program 在核心上跑一次，输出视觉 token（并与 golden model 比对） |
+| `sw/vit_chat.py` | 图像问答：先视觉塔、再文本模型（`sudo ./run.sh vit --question "..."`） |
 | `sw/selftest.py` | 上板自检（硬件通路 + 模型逐比特比对） |
 | `data/` | `image.bin`（887 MiB：权重+状态）、`embed_bf16.bin`、`queues.bin`、`manifest.json`、`tokenizer.json`、`expected.json`、`selftest/` |
 | `data_mtp/`、`data_qwen3/`、`data_gemma3/` | 其他模型的导出，结构同 `data/`（用 `run.sh <模型>` 选择） |
+| `data_vit/` | 视觉塔的导出（`tools/prep_vision_kv260.py`，一张图一个 program 约 118 MiB）：`program.bin`、`meta.json`、`tokens_golden.npy` |
 | `data_gemma4/`、`data_gemma4_w4/` | Gemma 4 E2B 的 W8A8 / W4A16 导出（T=512，约 1.9 / 1.21 GiB；`ple_bf16.bin`、`embed_bf16.bin` 可在板上硬链接共享）。W4A16 目录的 `min_firmware=0x00040001`（VERSION bit 0 = 带 W4 单元），当前 0x00040000 的固件会拒绝加载——这正确表示了"W4 比特流尚未发布" |
 | `data_fp16/`、`data_fp32_v34/`、`firmware_v34/` | FP16 状态实验（需要 v3.4 固件，`run.sh` 不加载，仅存档） |
 | `firmware_v33_profile/` | 带分算子计数器的 v3.3 实验比特流（仅存档） |
