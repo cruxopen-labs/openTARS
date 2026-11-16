@@ -34,13 +34,17 @@ module tm_xpu #(
   parameter int VQ = 128,                 // reads in flight / buffered (power of two)
   parameter int RB = 64,                  // output segment bytes
   parameter int MB = 8,                   // GEMV: rows at most (the core sends M <= MB, M <= K / 16)
-  parameter int RW = 1                    // GEMV: W in requests of 16 RW bytes (the port's wide reads; 1, 2 or 4)
+  parameter int RW = 1,                   // GEMV: W in requests of 16 RW bytes (the port's wide reads; 1, 2 or 4)
+  parameter bit W4 = 1,                   // this build carries the W4A16 mode (op 6, 7)
+  parameter int W4MB = 4,                 // W4: rows per pass (the core splits M > W4MB into passes)
+  parameter int W4XD = 512                // W4: X bank depth: groups held (K / 128)
 ) (
   input  logic         clk,
   input  logic         rst,
   // descriptor (held while busy)
   input  logic         start,
-  input  logic [2:0]   op,                // 0 ELT, 1 ROPE, 2 FDOT NT, 3 FDOT NN, 4 QUANT, 5 GEMV
+  input  logic [2:0]   op,                // 0 ELT, 1 ROPE, 2 FDOT NT, 3 FDOT NN, 4 QUANT, 5 GEMV,
+                                          // 6 W4A16 (FP32 activations), 7 W4A16 (BF16 activations)
   input  logic [1:0]   qm,                // GEMV: 1 per-tensor scale, 2 per-channel, 3 per-channel + row scale
   input  logic         bias,              // GEMV: bias at c_base
   input  logic [63:0]  r_base,            // GEMV: the row scale (QM 3)
@@ -88,7 +92,24 @@ module tm_xpu #(
 );
   import tm_fp_pkg::*;
   localparam int LQ = $clog2(VQ);
-  localparam logic [2:0] O_ELT = 3'd0, O_ROPE = 3'd1, O_NT = 3'd2, O_NN = 3'd3, O_Q = 3'd4, O_GV = 3'd5;
+  localparam logic [2:0] O_ELT = 3'd0, O_ROPE = 3'd1, O_NT = 3'd2, O_NN = 3'd3, O_Q = 3'd4, O_GV = 3'd5,
+                         O_W4 = 3'd6, O_W4H = 3'd7;   // W4A16: FP32 / BF16 activations
+  logic        w4m;                       // this descriptor is a W4A16 GEMM
+  assign w4m = W4 != 0 && (op == O_W4 || op == O_W4H);
+  // the W4A16 client (tm_w4, below): its walker hands this unit the beat to issue, the unit hands
+  // it the queue's head, and the client drives its rows through this unit's output queue
+  localparam int W4HI = 128 * ((((RW < 4) ? 4 : RW) > 1) ? ((RW < 4) ? 4 : RW) - 1 : 1);
+  logic        w4_beat_v, w4_pop_ok, w4_busy;
+  logic [63:0] w4_baddr;
+  logic [2:0]  w4_bkind;
+  logic        w4_blast, w4_bwide, w4_lq_go;
+  logic [8:0]  w4_bcg;
+  logic [1:0]  w4_bbiw;
+  logic [31:0] w4_lat, w4_lq_len;
+  logic [63:0] w4_lq_addr;
+  logic [8*RB-1:0] w4_row;
+  logic [31:0] w4_sx;
+  logic [8*RB-1:0] x_row_g;               // this unit's own row (the W4 client has its own)
   localparam logic [2:0] K_A = 3'd0, K_B = 3'd1, K_C = 3'd2, K_XP = 3'd3, K_COS = 3'd4, K_SIN = 3'd5,
                          K_S = 3'd6, K_X = 3'd7;   // GEMV: K_XP = the row-scale beat, K_S scales, K_X x, K_B W, K_C bias
 
@@ -110,10 +131,12 @@ module tm_xpu #(
     act_l    = long_act ? 32'd122 : sp_act ? 32'(tm_fp_pkg::SP_LAT) : 32'd1;
     act_e    = act_l + ((long_act || sp_act) ? 32'(SW) : 32'd0);    // ELT
     pl       = (op == O_ELT) ? act_e + ((eop == 2'd2) ? 32'd6 : 32'd3) : (op == O_ROPE) ? 32'd6 :
-               (op == O_GV) ? act_l + 32'd16 : 32'd0;
+               (op == O_GV) ? act_l + 32'd16 : w4m ? act_l : 32'd0;
     lat_c    = pl + cl;
   end
-  always_ff @(posedge clk) lat <= lat_c;  // descriptor constant: registered (the core's tap select)
+  // W4A16 launches a row as its values reach the activation's input (no 16-cycle epilogue ahead
+  // of the launch), so it keeps its own latency constant
+  always_ff @(posedge clk) lat <= w4m ? w4_lat : lat_c;
 
   // ------------------------------------------------------------------ reader
   // walker: row m, j (NT: column n; NN: 16-column chunk; QUANT: pass), k (NN), g (group), s
@@ -309,6 +332,14 @@ module tm_xpu #(
     if ((op == O_ELT && ((half_in && b_kind == K_A) || (out == 2'd3 && b_kind == K_C))) ||
         (op == O_NN && half_in && b_kind == K_B && !fw_nn)) b_addr[3:0] = 4'd0;
     b_roaddr = (op == O_Q) ? rs_p : ry_row + 64'(ry_g);
+    // W4A16: the client's walker owns the beat; its group rides in the tag's laddr, its sub-beat
+    // in llen (the launch fields mean nothing to this op)
+    if (w4m) begin
+      b_kind = w4_bkind; b_addr = w4_baddr; b_last = w4_blast; b_wd = w4_bwide;
+      b_skip = 1'b0; b_launch = 1'b0; b_pend = 1'b0; b_first = 1'b0; b_rot = 1'b0; b_neg = 1'b0;
+      b_q1 = 1'b0; b_lg = 2'd0; b_ws = 2'd0; b_half = 1'b0;
+      b_laddr = {55'd0, w4_bcg}; b_roaddr = 64'd0; b_llen = {6'd0, w4_bbiw};
+    end
     rd_go = cv && cnt < (LQ + 1)'(VQ);
     rq_go = rd_go;
     rq_addr = c_addr;
@@ -396,8 +427,11 @@ module tm_xpu #(
     h_launch = qt_h.la;
     // a step fires on its last beat; the beat waits if the step cannot fire yet
     s_ok = SW == 0 || op != O_ELT || !(long_act || sp_act) || s_cnt == 0;
-    fire = q_rcv != 0 && h_last && !c_wait && (!h_launch || (oq_free && gl_rem == '0)) && !ro_go && s_ok && !fw_nt;
-    pop  = q_rcv != 0 && !g_run && (!h_last || (fire && (!(fw_nn && hk == K_B) || h_done)));
+    fire = q_rcv != 0 && h_last && !c_wait && (!h_launch || (oq_free && gl_rem == '0)) && !ro_go && s_ok && !fw_nt &&
+           !w4m;
+    // W4A16 gates its own pops (its align buffer, one group a cycle, a channel's launches)
+    pop  = w4m ? (q_rcv != 0 && w4_pop_ok) :
+           q_rcv != 0 && !g_run && (!h_last || (fire && (!(fw_nn && hk == K_B) || h_done)));
     g_e  = LQ'(e_n);
     g_e3 = LQ'(e_n + (e_n << 1));
     g_go  = fw_nt && !g_run && !c_wait && q_rcv != 0 && hk == K_B && (LQ + 1)'(q_rcv) >= (LQ + 1)'(e_n << 2);
@@ -532,7 +566,7 @@ module tm_xpu #(
     else if (s_cnt != 0) s_cnt <= s_cnt - 2'd1;
   end
   tm_sfu_port #(4) u_sp (.clk, .v(i_fire), .x(ia), .sx(s_px), .sy(sfu_y), .y(s_y));
-  assign sfu_x = gsel ? gv_y : s_px;
+  assign sfu_x = w4m ? w4_sx : gsel ? gv_y : s_px;
 `else
   assign s_cnt = 2'd0;
 `endif
@@ -682,16 +716,20 @@ module tm_xpu #(
            : (out != 2'd2) ? (raw1 ? {96'b0, cv_in1[0]} : {64'b0, cv_b})
            : (raw4 ? {96'b0, cv_in4[0]} : {96'b0, cv_q});
   end
-  always_ff @(posedge clk) x_row <= (8 * RB)'(cv_row);
+  always_ff @(posedge clk) x_row_g <= (8 * RB)'(cv_row);
 
   // ------------------------------------------------------------------ control
   logic        rds;                        // a beat is issued
   assign rds  = rd_go && rq_ready;
-  assign wadv = r_act && (!cv || rds);
-  assign lq_go   = i_launch || ro_go || gl_go;
-  assign lq_addr = ro_go ? ro_la : gl_go ? gl_la : i_laddr;
-  assign lq_len  = ro_go ? (ro_raw ? 32'd4 : (op == O_NT) ? es : es << 2) : gl_go ? es : i_llen;
-  assign busy    = r_act || cv || q_rcv != 0 || cnt != 0 || c_wait || f_v || g_run || i_launch || ro_go || gl_go || gl_rem != '0;
+  // the walker hands its beat to the candidate register: this unit's own, or the W4 client's
+  assign wadv = (w4m ? w4_beat_v : r_act) && (!cv || rds);
+  wire w4_sel = w4m;                       // (a wire so the generate's tie-offs read naturally)
+  assign lq_go   = w4_sel ? w4_lq_go : i_launch || ro_go || gl_go;
+  assign lq_addr = w4_sel ? w4_lq_addr : ro_go ? ro_la : gl_go ? gl_la : i_laddr;
+  assign lq_len  = w4_sel ? w4_lq_len : ro_go ? (ro_raw ? 32'd4 : (op == O_NT) ? es : es << 2) : gl_go ? es : i_llen;
+  assign x_row   = w4_sel ? w4_row : x_row_g;
+  assign busy    = r_act || cv || q_rcv != 0 || cnt != 0 || c_wait || f_v || g_run || i_launch || ro_go || gl_go ||
+                   gl_rem != '0 || w4_busy;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -710,14 +748,14 @@ module tm_xpu #(
       if (start) cv <= 1'b0;
       else if (wadv) begin
         cv <= 1'b1; c_addr <= b_addr; c_kind <= b_kind; c_last <= b_last && !(fw_nt && b_kind == K_A); c_launch <= b_launch && b_last;
-        c_wide <= (gw && rj == 1 && b_kind == K_B) || b_wd;
+        c_wide <= (gw && rj == 1 && b_kind == K_B) || b_wd || (w4m && b_kind == 3'd3);   // W4: its K_W
         c_pend <= b_pend && b_last; c_first <= b_first; c_rot <= b_rot; c_neg <= b_neg; c_q1 <= b_q1;
         c_lg <= b_lg; c_ws <= b_ws; c_laddr <= b_laddr; c_llen <= b_llen; c_roaddr <= b_roaddr; c_half <= b_half;
       end else if (rds) cv <= 1'b0;
       if (start) bk_v <= 1'b0;
       else if (wadv && op == O_ELT && b_kind == K_B) begin bk_v <= 1'b1; bk_a <= b_addr[63:4]; end
       if (start) begin
-        r_act <= m_n != 0; ra_ph <= 1'b0; hfl <= 1'b0; hseg <= 2'd0; aw_w <= 7'd0;
+        r_act <= !w4m && m_n != 0; ra_ph <= 1'b0; hfl <= 1'b0; hseg <= 2'd0; aw_w <= 7'd0;
         rm <= 0; rj <= 0; rk <= 0; rg <= 0; rs <= 0;
         ra_row <= a_base; rb_row <= b_base; rc_row <= c_base;
         ry_row <= y_base; ry_g <= 0; rb_n <= b_base; rb_k <= b_base; rtab <= b_base; rgc <= g_n;
@@ -1026,6 +1064,35 @@ module tm_xpu #(
     end
   end
 
+  // ------------------------------------------------------------------ W4A16 GEMM (the client)
+  // The client walks its own descriptor (the weights in 4-bit groups of 128, the fp16 group
+  // scales, the aligned 16-bit activations) and owns its datapath; the read port, the beat queue,
+  // the issue accounting and the output queue above are shared with every other op. It hands this
+  // unit one beat at a time and reads the head back, so the two walkers never mix.
+  if (W4) begin : g_w4u
+    tm_w4 #(.VQ(VQ), .RB(RB), .MB(W4MB), .RW(RW), .XD(W4XD)) u_w4 (
+      .clk, .rst, .start(start && w4m), .bias, .act, .out, .osc, .a32(op == O_W4),
+      .m_n(w4m ? m_n : 32'd0), .n_n(w4m ? n_n : 32'd0), .k_n(w4m ? k_n : 32'd0),
+      .a_base, .w_base(b_base), .y_base, .s_base, .b_base(c_base),
+      .lda(w4m ? lda : 32'd0), .ldy(w4m ? ldy : 32'd0), .busy(w4_busy), .lat(w4_lat),
+      .beat_v(w4_beat_v), .beat_addr(w4_baddr), .beat_kind(w4_bkind), .beat_last(w4_blast),
+      .beat_wide(w4_bwide), .beat_cg(w4_bcg), .beat_biw(w4_bbiw),
+      .cand_free(!cv || rds), .host_idle(cnt == 0 && q_rcv == 0),
+      .pop, .qtag({qt_h.l, qt_h.k, qt_h.laddr[8:0], qt_h.llen[1:0]}),
+      .qd_h, .qh_h(W4HI'(qh_h)), .pop_ok(w4_pop_ok),
+      .oq_free, .lq_go(w4_lq_go), .lq_addr(w4_lq_addr), .lq_len(w4_lq_len), .x_row(w4_row)
+`ifdef TM_FPGA
+      , .sfu_x(w4_sx), .sfu_y
+`endif
+    );
+  end else begin : g_now4
+    assign w4_beat_v = 1'b0;  assign w4_baddr = 64'd0; assign w4_bkind = 3'd0;
+    assign w4_blast = 1'b0;   assign w4_bwide = 1'b0;  assign w4_bcg = 9'd0;
+    assign w4_bbiw = 2'd0;    assign w4_pop_ok = 1'b0; assign w4_busy = 1'b0;
+    assign w4_lat = 32'd1;    assign w4_lq_go = 1'b0;  assign w4_lq_addr = 64'd0;
+    assign w4_lq_len = 32'd0; assign w4_row = '0;      assign w4_sx = 32'd0;
+  end
+
 endmodule
 
 // ------------------------------------------------------------------ W4A16 GEMM unit (tm_w4)
@@ -1069,14 +1136,22 @@ module tm_w4 #(
   input  logic [31:0]  lda, ldy,
   output logic         busy,
   output logic [31:0]  lat,               // launch-to-data latency of this descriptor
-  // reads (returns in order)
-  output logic         rq_go,
-  output logic [63:0]  rq_addr,
-  output logic         rq_wide,           // RW > 1: this request is a 16 RW-byte one
-  input  logic         rq_ready,
-  input  logic         rq_ret,
-  input  logic [127:0] rq_data,
-  input  logic [128*(RW > 1 ? RW - 1 : 1)-1:0] rq_hi,
+  // The host (tm_xpu) owns the read port, the beat queue and the output queue; this unit is the
+  // walker and the datapath behind them. It hands the host its next beat and reads the head back:
+  output logic         beat_v,            // the walker has a beat (its address and tags are valid)
+  output logic [63:0]  beat_addr,
+  output logic [2:0]   beat_kind,
+  output logic         beat_last, beat_wide,
+  output logic [8:0]   beat_cg,           // ... its group (W beats) and sub-beat
+  output logic [1:0]   beat_biw,
+  input  logic         cand_free,         // the host's candidate register is free (or its beat left)
+  input  logic         host_idle,         // the host's queue is empty and its port is idle
+  input  logic         pop,               // the host consumes the queue's head this cycle
+  input  logic [14:0]  qtag,              // the head's tag, this unit's layout: {last, kind, cg, biw}
+  input  logic [127:0] qd_h,              // the head's byte 0..15
+  input  logic [128*(RW4 > 1 ? RW4 - 1 : 1)-1:0] qh_h,   // ... its upper 16 (RW4 - 1) bytes
+  output logic         pop_ok,            // the head may be consumed this cycle (the queue's count
+                                          // and the host's own guards are the host's business)
   // output queue
   input  logic         oq_free,
   output logic         lq_go,
@@ -1173,37 +1248,23 @@ module tm_w4 #(
   logic [31:0] rsec;                        // scale beats issued
   logic [15:0] rwb;                         // W beats issued
   logic [63:0] r_sabs, r_sbeat, r_wrow, r_wbeat, nx_rs;
-  logic        cv, rds, wadv;
-  logic [63:0] a_addr, c_addr;              // the walker's beat; the candidate register
-  logic [2:0]  a_kind, c_kind;
-  logic [8:0]  a_cg, c_cg;                  // ... its group (W beats)
-  logic [1:0]  a_biw, c_biw;                // ... and sub-beat
-  logic        a_last, c_last;
-  logic [14:0] qt_w, qt_h;                  // {last, kind, group, sub-beat}
-  logic [LQ-1:0] q_t, q_r, q_h;
-  logic [LQ:0] cnt, q_rcv;
-  logic [127:0] qd_h;
-  logic [128*(RW4 - 1)-1:0] qh_h;          // the head beat's upper bytes
-  // the wide beat's upper bytes, zero-padded on the RW = 1 core build (it never drives mr_wide)
-  logic [128*(RW4 - 1)-1:0] rq_hi_x;
-  if (RW4 == RW) begin : g_hiw
-    assign rq_hi_x = rq_hi;
-  end else begin : g_hiz
-    logic [128*(RW > 1 ? RW - 1 : 1)-1:0] unused_hi;
-    assign unused_hi = rq_hi;
-    assign rq_hi_x = '0;
-  end
+  logic        wadv;
+  logic [63:0] a_addr;                      // the walker's beat (the host registers it)
+  logic [2:0]  a_kind;
+  logic [8:0]  a_cg;                        // ... its group (W beats)
+  logic [1:0]  a_biw;                       // ... and sub-beat
+  logic        a_last;
+  logic [14:0] qt_h;                        // the host queue's head tag: {last, kind, group, sub-beat}
   logic [128*RW4-1:0] wreg;                 // the popped W beat's weights (the products run a
                                             // ... cycle later, with the X banks' read caught up)
   logic        fire_d;                      // the popped W beat's first product cycle
   logic        fw1;                         // fire_d delayed 1 (the beat's second group, GPB = 2)
   logic        sclr;                        // a channel's scale beats: clear the group banks
-  logic        rd_go;
   logic [31:0] nbs;                         // the channel's scale row's beats (floor aligned)
 
   always_comb begin
     nbs = (32'(r_sabs[3:0]) + twog + 32'd15) >> 4;
-    // the candidate: the beat the walker is on
+    // the walker's beat
     a_kind = K_A; a_addr = 64'd0; a_last = 1'b0;
     if (ph == 2'd0) begin
       a_kind = K_A;
@@ -1220,38 +1281,18 @@ module tm_w4 #(
     end
     a_cg  = 9'd0; a_biw = 2'd0;
     if (a_kind == K_W) begin a_cg = 9'(32'(rwb) << (GPB == 2)); a_biw = 2'd0; end
-    rd_go   = cv && cnt < (LQ + 1)'(VQ);
-    rq_go   = rd_go;
-    rq_wide = c_kind == K_W;
-    rq_addr = c_addr;
   end
-  assign rds  = rd_go && rq_ready;
-  assign wadv = ((ph == 2'd0) ? a_run : w_run) && (!cv || rds);
-  assign qt_w = {c_last, c_kind, c_cg, c_biw};   // the candidate's tag (the beat the port accepts)
-
-`ifdef TM_FPGA
-  logic [31:0]  q_ra [1];
-  logic [14:0]  qt_rd [1];
-  logic [127:0] qd_rd [1];
-  logic [128*(RW4 - 1)-1:0] qh_rd [1];
-  assign q_ra[0] = 32'(q_h);
-  tm_lutram #(.W(15), .D(VQ), .NR(1)) u_qt (.clk, .we(rds && !rst), .wa(32'(q_t)), .wd(qt_w),
-                                           .ra(q_ra), .rd(qt_rd));
-  tm_lutram #(.W(128), .D(VQ), .NR(1)) u_qd (.clk, .we(rq_ret && !rst), .wa(32'(q_r)), .wd(rq_data),
-                                             .ra(q_ra), .rd(qd_rd));
-  tm_lutram #(.W(128 * (RW4 - 1)), .D(VQ), .NR(1)) u_qh (.clk, .we(rq_ret && !rst), .wa(32'(q_r)),
-                                                        .wd(rq_hi_x), .ra(q_ra), .rd(qh_rd));
-  assign qt_h = qt_rd[0];
-  assign qd_h = qd_rd[0];
-  assign qh_h = qh_rd[0];
-`else
-  logic [14:0]  qt [VQ];
-  logic [127:0] qd [VQ];
-  logic [128*(RW4 - 1)-1:0] qh [VQ];
-  assign qt_h = qt[q_h];
-  assign qd_h = qd[q_h];
-  assign qh_h = qh[q_h];
-`endif
+  // The host owns the port and the queue: it takes this beat into its candidate register when that
+  // is free, issues it, and returns the head (a tag in this unit's layout) for the pop below.
+  assign wadv      = ((ph == 2'd0) ? a_run : w_run) && cand_free;
+  assign beat_v    = (ph == 2'd0) ? a_run : w_run;
+  assign beat_addr = a_addr;
+  assign beat_kind = a_kind;
+  assign beat_last = a_last;
+  assign beat_wide = a_kind == K_W;
+  assign beat_cg   = a_cg;
+  assign beat_biw  = a_biw;
+  assign qt_h      = qtag;
 
   // ------------------------------------------------------------ phase 1: fill and align
   // A group's 128 fp32 values, 4 a word, in two LUTRAM banks (even and odd words) so that the
@@ -1413,12 +1454,12 @@ module tm_w4 #(
                                     .wa(32'(f1_g)), .wd(sc), .ra(msc_ra), .rd(msc_rd[mm]));
   end
   assign nx_rs   = r_sabs + 64'(twog);
-  // the head's pop: a fill beat when its buffer is free; a W beat when the previous beat's groups
-  // are consumed (a pop every GPB cycles); everything waits while a channel's sums land and
-  // launch (the next channel's scale / bias beats would overwrite ws and breg)
-  logic pop;
-  assign pop = q_rcv != 0 && !drn && ((qt_h[13:11] == K_A) ? fill_ok
-              : (qt_h[13:11] == K_W) ? ((GPB == 1) || !fire_d) : 1'b1);
+  // When the host may consume the head: a fill beat when its buffer is free; a W beat when the
+  // previous beat's groups are consumed (a pop every GPB cycles); everything waits while a
+  // channel's sums land and launch (the next channel's scale / bias beats would overwrite ws and
+  // breg). The host adds its queue count; `pop` (an input) is its decision.
+  assign pop_ok = !drn && ((qt_h[13:11] == K_A) ? fill_ok
+                : (qt_h[13:11] == K_W) ? ((GPB == 1) || !fire_d) : 1'b1);
   assign sclr = pop && qt_h[13:11] == K_S;
   assign wsb_we = sclr;                                            // a scale beat into u_wsb
   assign wsb_ra = 7'((32'(c_sabs[3:0]) + 2 * 32'(gq[0])) >> 4);     // the group's beat, read at T + 4
@@ -1560,44 +1601,17 @@ module tm_w4 #(
   assign lq_addr = c_ych + rowoff(lp, ldy);
   assign lq_len  = es;
   logic        ph2_go;                     // the phase-2 handoff (this cycle)
-  assign ph2_go  = (ph == 2'd0) && !a_run && cnt == 0 && q_rcv == 0 && !al_busy && !pend_v &&
+  assign ph2_go  = (ph == 2'd0) && !a_run && host_idle && !al_busy && !pend_v &&
                    al_cnt == tot_g && tot_g != 32'd0;   // the phase-2 handoff (this cycle)
-  assign busy    = ((ph == 2'd0) ? a_run : w_run) || cv || cnt != 0 || q_rcv != 0 ||
-                   al_busy || pend_v || drn || ph2_go;
+  assign busy    = beat_v || al_busy || pend_v || drn || ph2_go;
 
   always_ff @(posedge clk) begin
     if (rst) begin
-      cv <= 1'b0; cnt <= 0; q_rcv <= 0; q_t <= 0; q_r <= 0; q_h <= 0;
       ph <= 2'd0; a_run <= 1'b0; w_run <= 1'b0; al_busy <= 1'b0; pend_v <= 1'b0;
       drn <= 1'b0; dw <= 8'd0; rr <= '0; fp_par <= 1'b0;
       remax <= 8'd0; renan <= 1'b0; reninf <= 1'b0; rsub <= 2'd0;
       fire_d <= 1'b0; fw1 <= 1'b0; lq_r <= 1'b0; pend_cg <= 9'd0;
     end else begin
-      // -------------------------------------------------------- reader, FIFO
-      if (rq_ret) begin
-`ifndef TM_FPGA
-        qd[q_r] <= rq_data;
-        qh[q_r] <= rq_hi_x;
-`endif
-        q_r <= q_r + 1'b1;
-      end
-      if (rds) begin
-`ifndef TM_FPGA
-        qt[q_t] <= qt_w;
-`endif
-        q_t <= q_t + 1'b1;
-      end
-      cnt   <= cnt + (LQ + 1)'(rds) - (LQ + 1)'(pop);
-      q_rcv <= q_rcv + (LQ + 1)'(rq_ret) - (LQ + 1)'(pop);
-      if (pop) q_h <= q_h + LQ'(1);
-
-      // the candidate register (the walker's beat goes out)
-      if (start) cv <= 1'b0;
-      else if (wadv) begin
-        cv <= 1'b1; c_addr <= a_addr; c_kind <= a_kind; c_last <= a_last;
-        c_cg <= a_cg; c_biw <= a_biw;
-      end else if (rds) cv <= 1'b0;
-
       // -------------------------------------------------------- phase 1: fill, close, align
       if (pop && qt_h[13:11] == K_A) begin
         // the beat's word (a32) or words (bf16) go into RAW through its write port (see raw_w0/w1)

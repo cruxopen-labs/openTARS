@@ -93,7 +93,7 @@ module tm_core
 `else
   localparam int SFU   = 0;
 `endif
-  logic [31:0] xp_sx, w4_sx, sfu_y;        // the extension unit's / W4's SFU input; the SFU's result
+  logic [31:0] xp_sx, sfu_y;               // the extension unit's SFU input; the SFU's result
   logic [31:0] xs_la [16], xs_lb [16], xs_fl [16], xs_rx, f_sum;   // the extension unit on the row engine's units
   initial begin
     if ((1 << $clog2(NB)) != NB || NB < 2 || NB * 16 < SK) $fatal(1, "bad NB");
@@ -187,7 +187,7 @@ module tm_core
   logic       f_sym, f_fus, f_gemm, f_bias, f_row, f_norm, f_conv;
   logic       f_gm;                        // GEMM or Conv (the matrix path)
   logic [31:0] f_gpr;                      // ARR 0: GEMV rows a pass
-  logic       f_elt, f_rope, f_fdot, f_v4, f_quant, f_x, f_soft, f_hdr_ok, f_grp_ok;   // v0.4
+  logic       f_elt, f_rope, f_fdot, f_v4, f_quant, f_x, f_xw, f_soft, f_hdr_ok, f_grp_ok;   // v0.4
   logic       f_gv;                        // GEMM M = 1 on the extension unit (GEMV)
   logic       f_w4;                        // W4A16: a GEMM with QM_GROUP and DT_INT4 weights
   logic [31:0] f_brow, f_ldb;              // v0.4: B row bytes and stride (ELT dense B, FDOT)
@@ -260,6 +260,7 @@ module tm_core
                         : f_gemm && d_m != 16'd0 && 32'(d_m) <= GB && d_k <= 16'd4096 && (d_m == 16'd1 || 32'(d_k >> 4) >= 32'(d_m));
     f_w4   = f_gemm && f_qm == 3'd3 && f_wdt == 4'd2;      // DT_INT4 (the group scales are binary16)
     f_x    = f_v4 || f_quant || f_gv;      // the extension unit's
+  f_xw   = f_x || f_w4;                  // ... with the W4A16 GEMM (M > GB sends it here only)
     f_hdr_ok = f_conv || (f_gemm && f_qm == 3'd3 && !f_w4) || (f_elt && d_hrsv < 24'd16) ||
                (f_fdot && d_ctrl[0] && d_hrsv == 24'd8);
     f_grp_ok = f_conv || f_v4 || f_w4;
@@ -488,12 +489,6 @@ module tm_core
   logic [8*RB-1:0] xp_row;
   // v0.4 W4A16 (QM_GROUP, DT_INT4): its own unit beside the extension unit (tm_xpu.sv's tm_w4);
   // it runs one like a GEMV pass (W4MB rows of A held, the weights streaming), M > W4MB in passes
-  logic        w4_start, w4_busy, w4_rq_go, w4_rq_wide, w4_lq_go, w4_run, w4_a32, w4_bias;
-  logic [2:0]  w4_act;
-  logic [1:0]  w4_out;
-  logic [31:0] w4_m, w4_n, w4_k, w4_lda, w4_ldy, w4_osc, w4_lat, w4_rem, w4_lq_len;
-  logic [63:0] w4_a, w4_w, w4_y, w4_s, w4_b, w4_rq_addr, w4_lq_addr;
-  logic [8*RB-1:0] w4_row;
   logic [31:0] x_eps, x_invn, x_nbr;     // eps bits, recip(i2f(N)), beats per row         // loop order m-inner (hold W) / n-inner (hold A); K fits
 
   // ------------------------------------------------------------------ GEMM tiling and array
@@ -770,8 +765,10 @@ module tm_core
 
   // ------------------------------------------------------------------ v0.4 extension unit
   // ELT, ROPE, FDOT and the row QUANT: its own reader (the read port is its own in S_X_RUN) and
-  // datapath; its outputs take output-queue slots like the epilogue's rows (tap: xp_lat)
-  tm_xpu #(.VQ(VQ), .RB(RB), .MB(GB), .RW(RW)) u_xpu (
+  // datapath; its outputs take output-queue slots like the epilogue's rows (tap: xp_lat). The
+  // W4A16 GEMM (op 6 / 7) is a mode of this unit: it shares the read port, the beat queue and the
+  // output queue, and brings its own walker and datapath (tm_w4, instantiated inside).
+  tm_xpu #(.VQ(VQ), .RB(RB), .MB(GB), .RW(RW), .W4(W4X), .W4MB(W4MB), .W4XD(W4XD)) u_xpu (
     .clk, .rst, .start(xp_start), .op(xp_op), .qm(xp_qm), .bias(x_bias), .r_base(xp_r), .eop(xp_eop), .bmode(xp_bmode), .arow(xp_arow),
     .act(x_act), .out(x_out), .half_in(xp_half), .osc(x_osc), .m_n(x_m), .n_n(x_n), .k_n(x_k), .g_n(xp_g),
     .a_base(x_a), .b_base(x_w), .c_base(xp_c), .y_base(x_y), .s_base(x_s),
@@ -786,28 +783,8 @@ module tm_core
 `endif
     );
   // The W4A16 unit: 13k LUTs of its own, so a bitstream that carries it does not carry the W8
-  // GEMV as well (W4X = 0 builds drop it entirely; the core then rejects W4 descriptors, cv[5]).
-  generate if (W4X) begin : g_w4u
-  tm_w4 #(.VQ(VQ), .RB(RB), .MB(W4MB), .RW(RW), .XD(W4XD)) u_w4 (
-    .clk, .rst, .start(w4_start), .bias(w4_bias), .act(w4_act), .out(w4_out), .osc(w4_osc),
-    .a32(w4_a32), .m_n(w4_m), .n_n(w4_n), .k_n(w4_k),
-    .a_base(w4_a), .w_base(w4_w), .y_base(w4_y), .s_base(w4_s), .b_base(w4_b),
-    .lda(w4_lda), .ldy(w4_ldy), .busy(w4_busy), .lat(w4_lat),
-    .rq_go(w4_rq_go), .rq_addr(w4_rq_addr), .rq_wide(w4_rq_wide),
-    .rq_ready(mr_ready && w4_run),
-    .rq_ret(mr_rvalid && w4_run), .rq_data(mr_rdata), .rq_hi(mr_rhi),
-    .oq_free(32'(oq_cnt) + 32'(xp_lq_go) + 32'(w4_lq_go) < 32'(OQ)),
-    .lq_go(w4_lq_go), .lq_addr(w4_lq_addr), .lq_len(w4_lq_len), .x_row(w4_row)
-`ifdef TM_FPGA
-    , .sfu_x(w4_sx), .sfu_y(sfu_y)
-`endif
-    );
-  end else begin : g_w4n
-    assign w4_busy = 1'b0; assign w4_lat = 32'd1;
-    assign w4_lq_go = 1'b0; assign w4_lq_addr = 64'd0; assign w4_lq_len = 32'd0;
-    assign w4_row = '0; assign w4_rq_go = 1'b0; assign w4_rq_addr = 64'd0; assign w4_rq_wide = 1'b0;
-    assign w4_sx = 32'd0;
-  end endgenerate
+  // GEMV as well. (The W4A16 GEMM is a mode of u_xpu now; W4X = 0 builds drop it there and the
+  // core rejects W4 descriptors, cv[5].)
 
   // ------------------------------------------------------------------ GEMM row epilogue
   // The epilogue engine: row e_ei of the handed-off tile (bank e_bank, origin e_m0 / e_n0, its
@@ -871,7 +848,7 @@ module tm_core
   end
 
   // GEMM / conv lanes, the extension unit's, or the row engine's
-  assign e_emerge = e_vsr[x_gemm ? e_lat : x_xpu ? xp_lat : w4_run ? w4_lat : v_olat];
+  assign e_emerge = e_vsr[x_gemm ? e_lat : x_xpu ? xp_lat : v_olat];
 
   for (genvar j = 0; j < C; j++) begin : g_epi
     logic [31:0] f0, s1, s0, y0, b4, y1a, y0d, y1, ya1, yalong, yasp, ya, ybf, yq, yq3, oq, iu;
@@ -1202,11 +1179,10 @@ module tm_core
   // ------------------------------------------------------------------ ports
   // the loader and the single-read subroutine never overlap: the loader runs only in S_G_FEED,
   // and the feed ends only after every chunk has arrived (no loader read is then in flight)
-  assign mr_req  = (state == S_RD_REQ) || l_go || v_go || (x_run && xp_rq_go) || (w4_run && w4_rq_go);
+  assign mr_req  = (state == S_RD_REQ) || l_go || v_go || (x_run && xp_rq_go);
   assign mr_addr = (state == S_RD_REQ) ? rd_addr : v_go ? v_addr :
-                   x_run ? xp_rq_addr : w4_run ? w4_rq_addr : cd_addr;
-  assign mr_wide = RW > 1 && !(state == S_RD_REQ) && !v_go &&
-                   (x_run && xp_rq_wide || w4_run && w4_rq_wide);
+                   x_run ? xp_rq_addr : cd_addr;
+  assign mr_wide = RW > 1 && !(state == S_RD_REQ) && !v_go && x_run && xp_rq_wide;
   // every write goes through the segment writer (GEMM / conv rows, row-op and activation groups)
   assign mw_req  = wr_busy;
   assign mw_addr = {wr_addr[63:4] + 60'(wr_b), 4'b0};
@@ -1244,7 +1220,8 @@ module tm_core
       S_V_PASS:                                            ph = v_con ? PH_R_ELEM : PH_R_MEM;
       S_V_GB:                                              ph = PH_R_MEM;
       S_V_ROW, S_V_FOLD, S_W_RUN:                          ph = PH_R_ELEM;
-      S_X_RUN:                                             ph = (xp_op == 3'd5) ? PH_G_FEED : PH_R_ELEM;   // GEMV counts as the GEMM's feed
+      S_X_RUN:                                             ph = (xp_op == 3'd5 || xp_op == 3'd6 || xp_op == 3'd7) ?
+                                                                PH_G_FEED : PH_R_ELEM;   // GEMV / W4A16 count as the GEMM's feed
       S_V_NEXT:                                            ph = PH_WRITE;
       default:                                             ph = PH_OTHER;
     endcase
@@ -1314,7 +1291,6 @@ module tm_core
       e_vsr <= '0; oq_tl <= 0; oq_dp <= 0; oq_hd <= 0; oq_cnt <= 0; oq_rdy <= '0;
       l_out <= 0; fq_h <= 0; fq_t <= 0; wr_busy <= 0; nv <= 0; vp <= 0; vg <= 0; cd_v <= 1'b0;
       v_occ <= 0; v_rcv <= 0; vq_t <= 0; vq_r <= 0; vq_h <= 0; xp_start <= 1'b0; x_xpu <= 1'b0; x_run <= 1'b0;
-      w4_start <= 1'b0; w4_run <= 1'b0;
     end else begin
       // ---------------------------------------------------- chunk loader (runs beside the FSM)
       if (l_st) begin                            // the loader's tile starts: tables, slots, vectors
@@ -1558,13 +1534,8 @@ module tm_core
       // their bits run on down the line: clear it at each dispatch, the latency tap may move
       // (shared by the row engine's output steps; the tap is the descriptor's latency)
       e_vsr <= (state == S_CHECK) ? '0 : {e_vsr[EL_MAX-1:0],
-                                          e_go || (v_con && v_last) || xp_lq_go || w4_lq_go};
-      if (w4_lq_go) begin
-`ifndef TM_FPGA
-        oq_a[oq_tl] <= w4_lq_addr; oq_l[oq_tl] <= w4_lq_len;
-`endif
-        oq_rdy[oq_tl] <= 1'b0; oq_tl <= oq_tl + 1'b1;
-      end else if (xp_lq_go) begin
+                                          e_go || (v_con && v_last) || xp_lq_go};
+      if (xp_lq_go) begin
 `ifndef TM_FPGA
         oq_a[oq_tl] <= xp_lq_addr; oq_l[oq_tl] <= xp_lq_len;
 `endif
@@ -1572,7 +1543,7 @@ module tm_core
       end
       if (e_emerge) begin
 `ifndef TM_FPGA
-        oq_d[oq_dp] <= x_gemm ? e_row : x_xpu ? xp_row : w4_run ? w4_row : v_row;
+        oq_d[oq_dp] <= x_gemm ? e_row : x_xpu ? xp_row : v_row;
 `endif
         oq_rdy[oq_dp] <= 1'b1; oq_dp <= oq_dp + 1'b1;
       end
@@ -1582,7 +1553,7 @@ module tm_core
         wr_nb   <= 8'((32'(oq_ah[3:0]) + oq_lh + 32'd15) >> 4);
         oq_rdy[oq_hd] <= 1'b0; oq_hd <= oq_hd + 1'b1;
       end
-      oq_cnt <= oq_cnt + (LQO + 1)'(e_go || (v_con && v_last) || xp_lq_go || w4_lq_go) - (LQO + 1)'(oq_pop);
+      oq_cnt <= oq_cnt + (LQO + 1)'(e_go || (v_con && v_last) || xp_lq_go) - (LQO + 1)'(oq_pop);
 
       if (state != S_IDLE && state != S_HALT) cycles <= cycles + 1;
       case (state)
@@ -1630,29 +1601,24 @@ module tm_core
             x_act   <= f_act;  x_out  <= f_out;
             x_a <= d_base + 64'(d_aoff); x_w <= d_base + 64'(d_woff); x_y <= d_base + 64'(d_yoff);
             x_s <= d_base + 64'(d_soff); x_b <= d_base + 64'(d_boff);
-            x_m <= (ARR == 0 && f_gv && 32'(d_m) > f_gpr) ? f_gpr : 32'(d_m); x_n <= 32'(d_n);
-            gp_rem <= (ARR == 0 && f_gv && 32'(d_m) > f_gpr) ? 32'(d_m) - f_gpr : 32'd0; gp_pr <= f_gpr; x_k <= 32'(d_k); feed_last <= 32'(d_k) + 32'(SK) - 32'd2;
+            x_m <= f_w4 ? ((32'(d_m) > 32'(W4MB)) ? 32'(W4MB) : 32'(d_m)) :
+                   (ARR == 0 && f_gv && 32'(d_m) > f_gpr) ? f_gpr : 32'(d_m); x_n <= 32'(d_n);
+            gp_rem <= f_w4 ? ((32'(d_m) > 32'(W4MB)) ? 32'(d_m) - 32'(W4MB) : 32'd0) :
+                      (ARR == 0 && f_gv && 32'(d_m) > f_gpr) ? 32'(d_m) - f_gpr : 32'd0;
+            gp_pr <= f_w4 ? 32'(W4MB) : f_gpr; x_k <= 32'(d_k); feed_last <= 32'(d_k) + 32'(SK) - 32'd2;
             x_reuse  <= 32'(d_k >> 4) <= 32'(KR);
             x_minner <= r_minner;
             x_lda <= f_lda; x_ldy <= f_ldy; x_es <= f_es; x_osc <= d_oscale;
             x_esl <= (f_out == 2'd0) ? 2'd2 : (f_out == 2'd2) ? 2'd0 : 2'd1;
             x_rldy <= r_rldy; ymr <= 0;
             // x_fn 3 (internal): RELU, the activation-only single pass of the row engine
-            x_row <= f_row && !f_quant; x_xpu <= f_x && !f_w4; xp_start <= f_x && !f_w4;
-            x_run <= f_x && !f_w4; w4_run <= f_w4; w4_start <= f_w4;
-            xp_op <= f_elt ? 3'd0 : f_rope ? 3'd1 : f_fdot ? (d_ctrl[0] ? 3'd3 : 3'd2) : f_gv ? 3'd5 : 3'd4;
+            x_row <= f_row && !f_quant; x_xpu <= f_xw; xp_start <= f_xw;
+            x_run <= f_xw;
+            xp_op <= f_elt ? 3'd0 : f_rope ? 3'd1 : f_fdot ? (d_ctrl[0] ? 3'd3 : 3'd2) :
+                     f_w4 ? (f_adt == 4'd4 ? 3'd6 : 3'd7) : f_gv ? 3'd5 : 3'd4;
             xp_qm <= f_qm[1:0]; xp_r <= d_base + {36'b0, d_hrsv, 4'b0};
             xp_eop <= d_ctrl[1:0]; xp_bmode <= d_hrsv[1:0]; xp_arow <= d_hrsv[2]; xp_half <= d_hrsv[3];
             xp_g <= 32'(d_group); xp_ldb <= f_ldb; xp_c <= d_base + 64'(d_boff);
-            // W4A16: the unit runs M rows a pass (the rest of M in passes like the GEMV's)
-            w4_a32 <= f_adt == 4'd4; w4_bias <= f_bias; w4_act <= f_act; w4_out <= f_out;
-            w4_osc <= d_oscale;
-            w4_a <= d_base + 64'(d_aoff); w4_w <= d_base + 64'(d_woff);
-            w4_y <= d_base + 64'(d_yoff); w4_s <= d_base + 64'(d_soff);
-            w4_b <= d_base + 64'(d_boff);
-            w4_n <= 32'(d_n); w4_k <= 32'(d_k); w4_lda <= f_lda; w4_ldy <= f_ldy;
-            w4_m <= (32'(d_m) > W4MB) ? 32'(W4MB) : 32'(d_m);
-            w4_rem <= (32'(d_m) > W4MB) ? 32'(d_m) - 32'(W4MB) : 32'd0;
             x_fn <= (d_op == OP_RELU) ? 2'd3 : (d_ctrl[1:0] == 2'd3) ? 2'd2 : d_ctrl[1:0];
             x_l2 <= f_row && d_ctrl[2:0] == 3'd3;
             x_causal <= f_row && d_ctrl[2:0] == 3'd0 && d_k != 0; x_kst <= 32'(d_k);
@@ -1690,7 +1656,7 @@ module tm_core
             end
             v_after_inv <= r_gbfit ? S_V_GB : S_V_ROW;
             inv_wait <= 8'd42;                    // i2f (1) + recip (38) + margin
-            state <= (f_x || f_w4) ? S_X_RUN
+            state <= f_xw ? S_X_RUN
                    : (ARR != 0 && f_gm) ? S_G_TILE
                    : f_norm ? S_V_INV            // 1/N first (the norms)
                    : f_row  ? ((SFU == 0 && r_wfit && d_k == 0) ? S_W_RUN : S_V_ROW)   // FPGA: no overlap
@@ -1803,21 +1769,8 @@ module tm_core
         S_V_NEXT: if (!wr_busy && oq_cnt == 0) begin qi <= qi + 1; q_daddr <= q_daddr + 64'd64; state <= S_NEXT; end
         S_X_RUN: begin                          // v0.4: the extension unit runs the descriptor
           if (xp_start) xp_start <= 1'b0;
-          if (w4_start) w4_start <= 1'b0;
-          else if (!xp_start && !xp_busy && !w4_busy && !wr_busy && oq_cnt == 0) begin
-            if (w4_run) begin
-              if (w4_rem != 0) begin            // W4A16: the GEMM's next rows, a pass
-                w4_a <= w4_a + 64'(w4_lda) * W4MB; w4_y <= w4_y + 64'(w4_ldy) * W4MB;
-                w4_m <= (w4_rem < 32'(W4MB)) ? w4_rem : 32'(W4MB);
-                w4_rem <= w4_rem - ((w4_rem < 32'(W4MB)) ? w4_rem : 32'(W4MB));
-                w4_start <= 1'b1;
-              end else begin
-                qi <= qi + 1; q_daddr <= q_daddr + 64'd64; state <= S_NEXT;
-                x_run <= 1'b0; w4_run <= 1'b0;
-                e_vsr <= '0;                 // the queue is empty: drop the launch trail before
-                                             // the latency tap falls back to the row engine's
-              end
-            end else if (gp_rem != 0) begin               // ARR 0: the GEMM's next rows, a GEMV pass
+          else if (!xp_start && !xp_busy && !wr_busy && oq_cnt == 0) begin
+            if (gp_rem != 0) begin               // the GEMM's next rows: a GEMV / W4A16 pass
               x_a <= x_a + 64'(gp_pr * x_lda); x_y <= x_y + 64'(gp_pr * x_ldy); xp_r <= xp_r + 64'(gp_pr << 2);
               x_m <= (gp_rem < gp_pr) ? gp_rem : gp_pr;
               gp_rem <= gp_rem - ((gp_rem < gp_pr) ? gp_rem : gp_pr);
@@ -1895,7 +1848,7 @@ module tm_core
   tm_sfu_port #(NS) u_vsp (.clk, .v(v_sv), .x(sx), .sx(v_sx), .sy(sfu_y), .y(v_sy));
   fpu_dly #(1, 3) u_vsv3 (.clk, .d(v_sv), .q(v_sv3));         // x - mx: 3 after the issue registers
   tm_sfu_port #(NS) u_xsp (.clk, .v(v_sv3), .x(v_xf), .sx(v_sxe), .sy(sfu_ye), .y(v_ye));
-  assign sfu_x = x_gemm ? e_sx : x_xpu ? xp_sx : w4_run ? w4_sx : v_sx;
+  assign sfu_x = x_gemm ? e_sx : x_xpu ? xp_sx : v_sx;
   fpu_act u_sfu (.clk, .x(sfu_x), .act(x_act), .y1(sfu_ya1), .ylong(sfu_yl), .ysp(sfu_ys),
                  .esel(x_row && x_fn == 2'd0), .xe(v_sxe), .ye(sfu_ye));
   assign sfu_y = x_sp ? sfu_ys : sfu_yl;
@@ -1960,12 +1913,11 @@ module tm_core
   assign oq_ra[0] = 32'(oq_hd);
   always_comb
     if (xp_lq_go)  oq_alw = {xp_lq_addr, xp_lq_len};
-    else if (w4_lq_go) oq_alw = {w4_lq_addr, w4_lq_len};
     else if (e_go) oq_alw = {r_addr, r_len};
     else           oq_alw = {v_yrow + (64'(v_gi_con) << (32'd2 + 32'(x_esl))), v_n << (32'd2 + 32'(x_esl))};
   tm_lutram #(.W(8 * RB), .D(OQ), .NR(1)) u_oqd (.clk, .we(e_emerge && !rst), .wa(32'(oq_dp)),
-                                                .wd(x_gemm ? e_row : x_xpu ? xp_row : w4_run ? w4_row : v_row), .ra(oq_ra), .rd(oq_drd));
-  tm_lutram #(.W(96), .D(OQ), .NR(1)) u_oqal (.clk, .we(((v_con && v_last) || e_go || xp_lq_go || w4_lq_go) && !rst),
+                                                .wd(x_gemm ? e_row : x_xpu ? xp_row : v_row), .ra(oq_ra), .rd(oq_drd));
+  tm_lutram #(.W(96), .D(OQ), .NR(1)) u_oqal (.clk, .we(((v_con && v_last) || e_go || xp_lq_go) && !rst),
                                              .wa(32'(oq_tl)), .wd(oq_alw), .ra(oq_ra), .rd(oq_alrd));
   assign oq_dh = oq_drd[0];
   assign {oq_ah, oq_lh} = oq_alrd[0];

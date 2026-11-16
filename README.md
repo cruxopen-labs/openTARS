@@ -81,17 +81,17 @@ two bitstream changes:
   7x the first narrow-read version). The contract adds K % 256 == 0, K <= 8192 and
   128-byte-aligned W offsets for W4 descriptors.
   **The KV260 cannot hold both paths** (measured, not estimated): the default W8A8 image is
-  107,964 LUTs after `opt_design` and 105,847 routed (WNS +0.029); the W4 image is 117,363
-  (100.2%) and still does not place (the last one that placed is 107,964; the previous W4 image
-  at 122,798 needed 10,302 CLBs against 8,461 available). `tm_w4` itself is 10,664 in that
-  image, 8,017 standalone after moving its activation buffer (RAW) and scale-beat store (wsb)
-  from register arrays into LUTRAMs, which cost 4,567 LUTs and changed no throughput or protocol;
-  2,700 of the rest is queue/FIFO/epilogue that `tm_xpu` already has. Its 128 multipliers already
-  sit in DSPs, so reusing the GEMV array saves only ~0.4k LUTs. A W4-only image still needs
-  ~9.4k less than it does now (~6.7k after folding the unit into `tm_xpu`). The bitstream ships
-  without it (VERSION 0x00040000 = 4 GB address space only); a W4 build reports 0x00040001 and
-  the W4 export refuses to load on the current firmware instead of computing wrong numbers. The
-  measured levers are in [docs/gemma4_w4](docs/gemma4_w4/README.md).
+  107,852 LUTs after `opt_design` (the fold left it unchanged) and 105,847 routed (WNS +0.029);
+  the W4 image is now 114,412 (97.7%) and still does not place (the last one that placed is ~108k;
+  the first W4 image at 122,798 needed 10,302 CLBs against 8,461 available). Two steps got it
+  from 122,798 down: moving its activation buffer (RAW) and scale-beat store (wsb) from register
+  arrays into LUTRAMs (117,363; `tm_w4` 10,664 in place, 8,017 standalone), then folding the unit
+  into `tm_xpu` as a mode of it (`op` 6/7) so it no longer owns its own read port, beat queue,
+  launch counter or output queue (114,412, -2,951). A W4-only image still needs ~6.4k less. Its
+  128 multipliers already sit in DSPs, so reusing the GEMV array saves only ~0.4k LUTs. The
+  bitstream ships without it (VERSION 0x00040000 = 4 GB address space only); a W4 build reports
+  0x00040001 and the W4 export refuses to load on the current firmware instead of computing wrong
+  numbers. The measured levers are in [docs/gemma4_w4](docs/gemma4_w4/README.md).
 
 The lowering maps the rest of the architecture with existing operators: per-layer embeddings (PLE)
 precomputed into the image (`ple_bf16.bin`), KV sharing for the last 20 layers, V-norm without
