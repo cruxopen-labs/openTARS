@@ -763,7 +763,9 @@ endmodule
 // last half; any error response) and come back across the clocks in order. rready holds while
 // the return queue is full, so nothing is ever dropped.
 module tm_hpr #(
-  parameter int PA = 40
+  parameter int PA = 40,
+  parameter int AD = 16,                  // AR beats queued
+  parameter int RD = 64                  // returned halves queued (64: two bursts of eight beats)
 ) (
   input  logic           clk,
   input  logic           rst,
@@ -804,7 +806,7 @@ module tm_hpr #(
   logic [383:0]  pk;
   logic          pe;                           // an error response among them
   logic          push;
-  tm_afifo #(.W(PA + 3), .D(16), .BRAM(1)) u_ar (.wclk(clk), .wrst(rst), .we(ar_v), .wd({ar_n1, ar_a}),
+  tm_afifo #(.W(PA + 3), .D(AD), .BRAM(1)) u_ar (.wclk(clk), .wrst(rst), .we(ar_v), .wd({ar_n1, ar_a}),
     .full(af_full), .rclk(hclk), .rrst(hrst), .rv(m_arvalid), .rd(af_q), .rr(m_arready));
   assign ar_rdy    = !af_full;
   assign m_araddr  = af_q[PA-1:0];
@@ -826,7 +828,7 @@ module tm_hpr #(
       pe <= (k == 2'd3) ? 1'b0 : pe || m_rresp[1];
       if (k == 2'd3) h <= !h;
     end
-  tm_afifo #(.W(515), .D(64), .BRAM(1)) u_r (.wclk(hclk), .wrst(hrst), .we(push),
+  tm_afifo #(.W(515), .D(RD), .BRAM(1)) u_r (.wclk(hclk), .wrst(hrst), .we(push),
     .wd({pe || m_rresp[1], m_rlast, h, m_rdata, pk}), .full(rf_full), .rclk(clk), .rrst(rst), .rv(r_v), .rd(rf_q),
     .rr(r_rdy));
   assign r_d    = rf_q[511:0];
