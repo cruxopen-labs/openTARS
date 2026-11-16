@@ -114,6 +114,27 @@ tars> ……（逐 token 输出）
 `/reset` 开始新对话，`/quit` 退出；上下文 256 token，满了自动开新对话。`sudo ./run.sh chat --raw`
 不套聊天模板（纯续写）；`--max-new N` 限制每轮生成长度。
 
+## 图像输入（Qwen3.5-0.8B + ViT，`vit`）
+
+```bash
+# PC：一张图一个 program（视觉塔的权重、缓冲、描述符，图的 patch / 位置行 / 旋转行都已写进去）
+python3 tools/prep_vision_kv260.py --ckpt ~/models/Qwen3.5-0.8B \
+    --image catsvsdogs.jpg --out build/data_vit
+scp -r build/data_vit ubuntu@<板子IP>:~/tars/        # 约 118 MiB
+
+# 板上
+sudo ./run.sh vit --question "左边是什么动物？"        # 视觉塔 + 文本模型，一条命令
+sudo python3 sw/vit_tower.py --data data_vit          # 只跑视觉塔（token 写到 /tmp/vit_tokens.npy）
+```
+
+视觉塔作为**一个 program** 在核心上一次跑完（patch embed、12 个 block、merger，944 条描述符）：
+`catsvsdogs.jpg` 经 `Qwen3VLProcessor` 的 `smart_resize` 变成 256x256，即 256 个 patch、64 个视觉 token，
+板上 **2.89 亿周期 ≈ 2.89 s**（100 MHz 跑满），token 与 golden model **逐位一致**。随后文本模型把这些
+1024 宽的视觉 token 写进 `<|image_pad|>` 对应的位置（主机直接写 x0 行，代替 embedding 查表），其余与
+`chat` 一样：88 个 prompt token（64 图像 + 24 文本）8.6 s，再 6.8 tok/s。`--tokens /tmp/vit_tokens.npy`
+可以跳过视觉塔、复用上次的 token。精度、代价与实现细节见
+[`视觉塔报告`](../../docs/qwen_vit/README.md)。
+
 ## Gemma 3 1B（可选，Qwen 仍为默认）
 
 固件不变（v3.3）。导出到 `data_gemma3/`，和其他模型放在同一个上板目录里，`run.sh` 第一个参数选模型：

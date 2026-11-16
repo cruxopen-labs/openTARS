@@ -119,6 +119,29 @@ A bug found by this work, in the shared reference helper: `qwen_ref._fake_quant_
 module's bias. No text linear in the models lowered so far has one, but every vision linear does, so
 the fake-quant tower was wrong by more than the quantization error until the bias was added back.
 
+## On the board (KV260, real weights, 2026-11-16)
+
+`tools/prep_vision_kv260.py` exports one image for the board and the two scripts in `deploy/kv260/sw/`
+run it: `vit_tower.py` (image in, visual tokens out) and `vit_chat.py` (the tower, then the language
+model with the visual rows in place of the `<|image_pad|>` positions — the same injection the
+reference model does, except the host writes the tower's 1024-wide rows instead of an embedding
+lookup).
+
+`catsvsdogs.jpg` (an orange tabby kitten and a golden retriever puppy): the processor's `smart_resize`
+takes 224x224 to 256x256, so 256 patches and 64 visual tokens; the program is 118 MiB, 944
+descriptors, and the KV260 runs it in **288,595,961 cycles = 2.89 s** (100.0 MHz effective, the core
+saturated) with the tokens **bit-identical** to the golden model. Then Qwen3.5-0.8B on the same core:
+88 prompt tokens (64 image, 24 text) in 8.6 s, 25 new tokens at 6.8 tok/s.
+
+    tars> 这是一张两只幼犬（一只橘猫和一只金毛寻回犬）并排躺在白色背景上的照片。
+    tars> 左边：橘色虎斑猫（Tabby cat），橙黄色带虎斑纹；右边：金毛寻回犬幼犬，浅金色……
+
+Both answers are right about the picture. The W8A8 tower is 8-10% (rms) away from the fp32 tower on
+this image — larger than at 64x64, because the activations of a real photo are bigger — and the
+lowered program sits at that same distance, so the quantization, not the lowering, is what the LLM
+sees. The text model's own numbers (0.15 s a token, 8.6 s for the prompt) are unchanged by the vision
+part: it is one extra program run before the conversation starts.
+
 ## Cross-check on the RTL core
 
 `tars_mini/rtlsim.run_core` runs the same program on the verilated v0.4 core (`R=8, C=8`) and its DDR

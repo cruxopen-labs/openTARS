@@ -138,6 +138,13 @@ image (GEMV-only, `ARR=0`) runs the very same program with bit-identical tokens 
 four itself; only the weight stream grows (99 MB of weights become 357 MB at 64x64 and 4.4 GB at
 224x224, [details](docs/qwen_vit/README.md#the-kv260-profile-no-array-same-tokens-the-weights-re-streamed)).
 
+**On the board (2026-11-16).** `tools/prep_vision_kv260.py` exports the tower for the KV260 and
+`sudo ./run.sh vit --question "…"` runs the whole path there: the tower first (118 MiB program, 944
+descriptors, 2.89 s for the 256x256 image the processor makes of `catsvsdogs.jpg`, i.e. 64 visual
+tokens, **bit-identical** to the golden model), then Qwen3.5-0.8B with those rows in place of the
+`<|image_pad|>` positions — 88 prompt tokens in 8.6 s, then 6.8 tok/s. Asked what is in the picture it
+answers 「左边：橘色虎斑猫…右边：金毛寻回犬幼犬，浅金色」, which is exactly the kitten and puppy in it.
+
 ## Version history
 
 Hardware iterations, including simulation-only attempts marked below. Board measurements use a
